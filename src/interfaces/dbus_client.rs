@@ -27,8 +27,7 @@ impl DBusClient {
         Self::default()
     }
 
-    #[allow(dead_code)]
-    fn get_players(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    pub fn get_players(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let proxy = self
             .conn
             .with_proxy("org.freedesktop.DBus", "/", Duration::from_millis(5000));

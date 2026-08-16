@@ -67,6 +67,18 @@ impl PlayerManager {
         self.subscribe_to_event(EventType::Seeked, tx.clone(), PlayerManagerMessage::Seeked);
         self.subscribe_to_event(EventType::Rate, tx.clone(), PlayerManagerMessage::Rate);
 
+        // Discover and query any players that are already active on D-Bus
+        if let Ok(player_ids) = self.dbus_client.get_players() {
+            for id in player_ids {
+                if let Ok(metadata) = self.dbus_client.query_metadata(&id) {
+                    let _ = tx.send(PlayerManagerMessage::Metadata(Box::new(metadata)));
+                }
+                if let Ok(playback) = self.dbus_client.query_playback_status(&id) {
+                    let _ = tx.send(PlayerManagerMessage::PlaybackState(playback));
+                }
+            }
+        }
+
         self.handle_events(rx, timer_tx);
     }
 
