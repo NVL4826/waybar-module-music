@@ -37,18 +37,14 @@ impl DBusMonitor {
         }
     }
 
-    // TODO: the dbus client should handle parsing like this
     fn determine_event_type(property: String) -> EventType {
         match property.to_lowercase().as_str() {
-            "metadata" => return EventType::PlayerSongChanged,
-            "playbackstatus" => return EventType::PlaybackChanged,
-            "seeked" => return EventType::Seeked,
-            "rate" => return EventType::Rate,
-            _ => (),
+            "metadata" => EventType::PlayerSongChanged,
+            "playbackstatus" => EventType::PlaybackChanged,
+            "seeked" => EventType::Seeked,
+            "rate" => EventType::Rate,
+            _ => EventType::Unknown(property),
         }
-
-        error!("got to end of message iteration without finding event type and without error, this should not happen");
-        EventType::ParseError
     }
 
     // FIXME: very nested...

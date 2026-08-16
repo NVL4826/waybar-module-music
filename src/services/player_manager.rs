@@ -281,20 +281,15 @@ impl PlayerManager {
                 }
             }
             Entry::Vacant(e) => {
-                let identity = self.dbus_client.query_mediaplayer_identity(&player_id);
-                let playback = self.dbus_client.query_playback_status(&player_id);
-                match identity {
-                    Ok(identity) => {
-                        let mut player_client = PlayerClient::new(identity, mpris_metadata);
-                        if let Ok(playback) = playback {
-                            player_client.update_playback_state(playback);
-                        }
-                        e.insert(player_client);
-                    }
-                    Err(err) => {
-                        error!("failed to query media player identity, skipping message: {err}");
-                    }
-                };
+                let identity = self
+                    .dbus_client
+                    .query_mediaplayer_identity(&player_id)
+                    .unwrap_or_else(|_| "mpd".to_string());
+                let mut player_client = PlayerClient::new(identity, mpris_metadata);
+                if let Ok(playback) = self.dbus_client.query_playback_status(&player_id) {
+                    player_client.update_playback_state(playback);
+                }
+                e.insert(player_client);
             }
         }
 
@@ -360,20 +355,17 @@ impl PlayerManager {
     fn query_player_if_not_exists(&self, players: &mut HashMap<String, PlayerClient>, id: &str) {
         if !players.contains_key(id) {
             debug!(
-                "got seeked message but player does not exist, attempting to query for metadata"
+                "got seeked/playback message but player does not exist, querying metadata"
             );
-            if let Ok(metadata) = self.dbus_client.query_metadata(id) {
-                match self.dbus_client.query_mediaplayer_identity(id) {
-                    Ok(identity) => {
-                        players.insert(id.to_owned(), PlayerClient::new(identity, metadata));
-                    }
-                    Err(err) => {
-                        error!("failed to query media player identity, skipping message: {err}");
-                    }
-                };
-            } else {
-                error!("got playback update for unknown player ID, and failed to query player");
-            }
+            let metadata = self
+                .dbus_client
+                .query_metadata(id)
+                .unwrap_or_else(|_| MprisMetadata::new(id.to_string()));
+            let identity = self
+                .dbus_client
+                .query_mediaplayer_identity(id)
+                .unwrap_or_else(|_| "mpd".to_string());
+            players.insert(id.to_owned(), PlayerClient::new(identity, metadata));
         }
     }
 

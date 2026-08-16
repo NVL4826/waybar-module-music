@@ -27,6 +27,14 @@ enum DisplayMessages {
     AnimationDue,
 }
 
+#[derive(serde::Serialize)]
+struct WaybarOutput<'a> {
+    text: &'a str,
+    tooltip: &'a str,
+    class: &'a str,
+    alt: &'a str,
+}
+
 pub struct Display {
     args: Arc<Args>,
     config: Arc<Config>,
@@ -40,21 +48,6 @@ impl Display {
             config,
             event_bus,
         }
-    }
-
-    fn escape_pango(&self, text_to_escape: &str) -> String {
-        text_to_escape
-            .chars()
-            .map(|x| match x {
-                // find and replace all special characters with escaped pango sequences
-                '&' => "&amp;".to_string(),
-                '<' => "&lt;".to_string(),
-                '>' => "&gt;".to_string(),
-                '\'' => "&#39;".to_string(),
-                '"' => "&quot;".to_string(),
-                _ => x.to_string(),
-            })
-            .collect()
     }
 
     fn init_worker(self: Arc<Self>) {
@@ -264,13 +257,18 @@ impl Display {
 
     /// Create the final output JSON, in the format that Waybar expects
     fn format_json_output(&self, text: &str, tooltip: &str, class: &str) -> String {
-        let text = self.escape_pango(text);
-        let tooltip = self.escape_pango(tooltip);
-        let class = self.escape_pango(class);
-        format!(
-            "{{\"text\": \"{}\", \"tooltip\": \"{}\", \"class\": \"{}\", \"alt\": \"{}\"}}",
-            text, tooltip, class, ""
-        )
+        let output = WaybarOutput {
+            text,
+            tooltip,
+            class,
+            alt: "",
+        };
+        serde_json::to_string(&output).unwrap_or_else(|_| {
+            format!(
+                "{{\"text\": \"{}\", \"tooltip\": \"{}\", \"class\": \"{}\", \"alt\": \"\"}}",
+                text, tooltip, class
+            )
+        })
     }
 
     fn populate_using_placeholders(
