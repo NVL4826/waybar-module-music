@@ -58,9 +58,4 @@ impl PlayerTimer {
     pub fn is_playing(&self) -> bool {
         self.playing
     }
-
-    #[allow(dead_code)]
-    pub fn time_ms_since_last_update(&self) -> u128 {
-        Instant::now().duration_since(self.last_update).as_millis()
-    }
 }

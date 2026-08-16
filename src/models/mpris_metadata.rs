@@ -7,51 +7,36 @@ use dbus::{
 #[derive(Debug, Clone, Encode, Decode, PartialEq)]
 pub struct MprisMetadata {
     pub player_id: String,
-    album_artist: Vec<String>,
-    content_created: Option<String>,
-    last_used: Option<String>,
-    genre: Vec<String>,
     pub artist: Vec<String>,
     pub title: Option<String>,
-    use_count: Option<u32>,
     pub album: Option<String>,
-    disc_number: Option<u8>,
-    track_number: Option<u8>,
     pub length: Option<u64>,
-    comment: Vec<String>,
-    track_id: Option<String>,
-    art_url: Option<String>,
 }
 
 impl MprisMetadata {
     pub fn new(sender: String) -> Self {
         Self {
-            player_id: sender.to_string(),
-            album_artist: vec![],
-            content_created: None,
-            last_used: None,
-            genre: vec![],
+            player_id: sender,
             artist: vec![],
             title: None,
-            use_count: None,
             album: None,
-            disc_number: None,
-            track_number: None,
             length: None,
-            comment: vec![],
-            track_id: None,
-            art_url: None,
         }
     }
 
     fn refarg_to_vec_string(value: Variant<Box<dyn RefArg>>) -> Vec<String> {
         let mut result = vec![];
 
-        // FIXME: not pretty!! must be a nicer way to unpack these values
-        for e in value.as_iter().unwrap().collect::<Vec<_>>() {
-            for e in e.as_iter().unwrap().collect::<Vec<_>>() {
-                for e in e.as_iter().unwrap().collect::<Vec<_>>() {
-                    result.push(e.as_str().unwrap().to_string());
+        if let Some(iter) = value.as_iter() {
+            for e in iter {
+                if let Some(s) = e.as_str() {
+                    result.push(s.to_string());
+                } else if let Some(inner) = e.as_iter() {
+                    for inner_e in inner {
+                        if let Some(s) = inner_e.as_str() {
+                            result.push(s.to_string());
+                        }
+                    }
                 }
             }
         }
@@ -65,20 +50,10 @@ impl MprisMetadata {
 
     fn set_field(&mut self, key: &str, value: Variant<Box<dyn RefArg>>) {
         match key {
-            "xesam:comment" => self.comment = MprisMetadata::refarg_to_vec_string(value),
-            "xesam:contentCreated" => self.content_created = MprisMetadata::refarg_to_string(value),
-            "xesam:album" => self.album = MprisMetadata::refarg_to_string(value),
-            "xesam:albumArtist" => self.album_artist = MprisMetadata::refarg_to_vec_string(value),
-            "xesam:artist" => self.artist = MprisMetadata::refarg_to_vec_string(value),
-            "xesam:discNumber" => self.disc_number = value.as_f64().map(|elem| elem as u8),
-            "xesam:lastUsed" => self.last_used = MprisMetadata::refarg_to_string(value),
-            "xesam:useCount" => self.use_count = value.as_f64().map(|elem| elem as u32),
-            "xesam:trackNumber" => self.track_number = value.as_f64().map(|elem| elem as u8),
             "xesam:title" => self.title = MprisMetadata::refarg_to_string(value),
-            "xesam:genre" => self.genre = MprisMetadata::refarg_to_vec_string(value),
+            "xesam:artist" => self.artist = MprisMetadata::refarg_to_vec_string(value),
+            "xesam:album" => self.album = MprisMetadata::refarg_to_string(value),
             "mpris:length" => self.length = value.as_i64().map(|elem| elem as u64),
-            "mpris:trackid" => self.track_id = MprisMetadata::refarg_to_string(value),
-            "mpris:artUrl" => self.art_url = MprisMetadata::refarg_to_string(value),
             _ => (),
         }
     }

@@ -12,8 +12,8 @@ use crate::{
     event_bus::{EventBusHandle, EventType},
     interfaces::dbus_client::DBusClient,
     models::{
-        args::Args, mpris_identity::MprisIdentity, mpris_metadata::MprisMetadata,
-        mpris_playback::MprisPlayback, mpris_rate::MprisRate, mpris_seeked::MprisSeeked,
+        args::Args, mpris_metadata::MprisMetadata, mpris_playback::MprisPlayback,
+        mpris_rate::MprisRate, mpris_seeked::MprisSeeked,
     },
 };
 
@@ -24,9 +24,6 @@ pub struct DBusMonitor {
     event_bus: EventBusHandle,
     dbus_client: Arc<DBusClient>,
 }
-
-// TODO: we also need to discover players when we run the program initially
-// who should handle that? the monitor, or a new service?
 
 impl DBusMonitor {
     pub fn new(args: Arc<Args>, event_bus: EventBusHandle, dbus_client: Arc<DBusClient>) -> Self {
@@ -47,7 +44,6 @@ impl DBusMonitor {
         }
     }
 
-    // FIXME: very nested...
     fn get_signal_property_keys(msg: &Message) -> Vec<String> {
         let mut result = vec![];
         for elem in msg.iter_init() {
@@ -80,10 +76,7 @@ impl DBusMonitor {
                 .whitelist
                 .iter()
                 .any(|w| identity.to_lowercase().contains(&w.to_lowercase())),
-            Err(err) => {
-                error!("failed to query media player identity, handling it anyway: {err}");
-                true
-            }
+            Err(_) => true,
         }
     }
 
@@ -121,19 +114,10 @@ impl DBusMonitor {
                 EventType::Rate => {
                     bincode::encode_to_vec(MprisRate::from_dbus_message(msg), config::standard())
                 }
-                EventType::Identity => bincode::encode_to_vec(
-                    MprisIdentity::from_dbus_message(msg),
-                    config::standard(),
-                ),
-                EventType::ParseError => {
-                    warn!("failed to parse message. skipping");
+                EventType::Unknown(_) => {
                     continue;
                 }
-                EventType::Unknown(found_arg) => {
-                    warn!("got unknown event with name '{found_arg}'. skipping");
-                    continue;
-                }
-                _ => continue, // ignore other messages
+                _ => continue,
             };
 
             match encoded {

@@ -85,50 +85,6 @@ impl DBusClient {
             Duration::from_millis(5000),
         )
     }
-
-    #[allow(dead_code)]
-    fn call_player_method(
-        &self,
-        player_id: &str,
-        method: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let proxy = self.get_media_player_proxy(player_id);
-        proxy.method_call::<(), _, _, _>("org.mpris.MediaPlayer2.Player", method, ())?;
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn play_mpris_player(&self, player_id: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.call_player_method(player_id, "Play")?;
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn pause_mpris_player(&self, player_id: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.call_player_method(player_id, "Pause")?;
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn play_pause_mpris_player(
-        &self,
-        player_id: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.call_player_method(player_id, "PlayPause")?;
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn next_mpris_player(&self, player_id: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.call_player_method(player_id, "Next")?;
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn previous_mpris_player(&self, player_id: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.call_player_method(player_id, "Previous")?;
-        Ok(())
-    }
 }
 
 // SAFETY: DBus Connection uses internal thread-safe synchronization for D-Bus communication.

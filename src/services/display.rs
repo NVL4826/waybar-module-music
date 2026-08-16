@@ -17,7 +17,7 @@ use std::{
         mpsc::{self, Receiver, Sender},
         Arc,
     },
-    thread::{self},
+    thread,
     time::Duration,
 };
 
@@ -300,18 +300,12 @@ impl Display {
                     } else {
                         player_state.title.clone()
                     };
-                    format!(
-                        "\u{2063}{}\u{2063}",
-                        fields.get_mut("title").unwrap().draw(&title_text)
-                    )
+                    fields.get_mut("title").unwrap().draw(&title_text)
                 },
             ),
             (
                 "artist",
-                format!(
-                    "\u{2063}{}\u{2063}",
-                    fields.get_mut("artist").unwrap().draw(&player_state.artist)
-                ),
+                fields.get_mut("artist").unwrap().draw(&player_state.artist),
             ),
             (
                 "album",

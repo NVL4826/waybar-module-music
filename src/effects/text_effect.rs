@@ -9,8 +9,8 @@ pub struct TextEffect {
     update_tick: Arc<Mutex<bool>>,
 }
 
-impl TextEffect {
-    pub fn new() -> Self {
+impl Default for TextEffect {
+    fn default() -> Self {
         let update_tick = Arc::new(Mutex::new(false));
         let effects = Arc::new(Mutex::new(vec![]));
 
@@ -20,6 +20,12 @@ impl TextEffect {
             effects,
             update_tick,
         }
+    }
+}
+
+impl TextEffect {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn set_effect_text(&mut self, text: String) {

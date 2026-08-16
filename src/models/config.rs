@@ -29,8 +29,6 @@ impl Default for Icons {
     }
 }
 
-static EMPTY_STRING: String = String::new();
-
 impl Config {
     pub fn new() -> Result<Self, ConfigError> {
         let config_dir = helpers::dir::get_and_create_dir(dirs::config_dir)?;
@@ -61,15 +59,15 @@ impl Config {
         Ok(())
     }
 
-    pub fn get_player_icon_by_partial_match(&self, player_name: &str) -> &String {
+    pub fn get_player_icon_by_partial_match(&self, player_name: &str) -> &str {
         for (k, v) in self.icons.players.iter() {
             if player_name.to_lowercase().contains(&k.to_lowercase()) {
-                return v;
+                return v.as_str();
             }
         }
-        self.icons.players.get("default").unwrap_or_else(|| {
+        self.icons.players.get("default").map(|s| s.as_str()).unwrap_or_else(|| {
             log::warn!("Failed to get default player icon! Has the default key-value been deleted? Defaulting to blank value");
-            &EMPTY_STRING
+            ""
         })
     }
 }
