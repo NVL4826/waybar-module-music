@@ -17,29 +17,8 @@ pub struct PlayerState {
 }
 
 impl PlayerState {
-    pub fn new(
-        player_id: String,
-        player_name: String,
-        artist: String,
-        album: String,
-        title: String,
-        playing: Option<PlaybackState>,
-        length: u64,
-        position: u128,
-    ) -> Self {
-        Self {
-            player_id,
-            player_name,
-            artist,
-            album,
-            title,
-            playing,
-            length,
-            position,
-        }
-    }
-
     // if there's no artist or track, then we assume we're missing all data
+    #[allow(dead_code)]
     pub fn has_data(&self) -> bool {
         !self.artist.is_empty() && !self.title.is_empty()
     }
@@ -57,7 +36,7 @@ impl PlayerState {
         let playing = playback.unwrap_or_default().playing;
         let length = metadata.length.unwrap_or(0);
 
-        Some(PlayerState::new(
+        Some(PlayerState {
             player_id,
             player_name,
             artist,
@@ -66,6 +45,49 @@ impl PlayerState {
             playing,
             length,
             position,
-        ))
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_player_state_from_mpris_data() {
+        let mut metadata = MprisMetadata::new("org.mpris.MediaPlayer2.mpd".to_string());
+        metadata.artist = vec!["Test Artist".to_string()];
+        metadata.album = Some("Test Album".to_string());
+        metadata.title = Some("Test Title".to_string());
+        metadata.length = Some(180_000_000);
+
+        let playback = Some(MprisPlayback {
+            player_id: "org.mpris.MediaPlayer2.mpd".to_string(),
+            playing: Some(PlaybackState::Playing),
+        });
+
+        let state = PlayerState::from_mpris_data(
+            "mpd".to_string(),
+            metadata,
+            playback,
+            50_000_000,
+        );
+
+        assert!(state.is_some());
+        let state = state.unwrap();
+        assert_eq!(state.player_name, "mpd");
+        assert_eq!(state.artist, "Test Artist");
+        assert_eq!(state.album, "Test Album");
+        assert_eq!(state.title, "Test Title");
+        assert_eq!(state.playing, Some(PlaybackState::Playing));
+        assert_eq!(state.length, 180_000_000);
+        assert_eq!(state.position, 50_000_000);
+    }
+
+    #[test]
+    fn test_player_state_missing_fields() {
+        let metadata = MprisMetadata::new("org.mpris.MediaPlayer2.mpd".to_string());
+        let state = PlayerState::from_mpris_data("mpd".to_string(), metadata, None, 0);
+        assert!(state.is_none());
     }
 }

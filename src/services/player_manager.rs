@@ -5,9 +5,9 @@ use crate::{
     event_bus::{EventBusHandle, EventType},
     interfaces::dbus_client::DBusClient,
     models::{
-        mpris_identity::MprisIdentity, mpris_metadata::MprisMetadata,
-        mpris_playback::MprisPlayback, mpris_rate::MprisRate, mpris_seeked::MprisSeeked,
-        player_client::PlayerClient, player_state::PlayerState, player_timer::PlayerTimer,
+        mpris_metadata::MprisMetadata, mpris_playback::MprisPlayback, mpris_rate::MprisRate,
+        mpris_seeked::MprisSeeked, player_client::PlayerClient, player_state::PlayerState,
+        player_timer::PlayerTimer,
     },
     services::runnable::Runnable,
 };
@@ -23,11 +23,10 @@ use std::{
 
 #[derive(Debug, Clone)]
 enum PlayerManagerMessage {
-    Metadata(MprisMetadata),
+    Metadata(Box<MprisMetadata>),
     PlaybackState(MprisPlayback),
     Seeked(MprisSeeked),
     Rate(MprisRate),
-    Identity(MprisIdentity),
     PlayerTick((String, u128)),
 }
 
@@ -63,7 +62,7 @@ impl PlayerManager {
         self.subscribe_to_event(
             EventType::PlayerSongChanged,
             tx.clone(),
-            PlayerManagerMessage::Metadata,
+            |m| PlayerManagerMessage::Metadata(Box::new(m)),
         );
         self.subscribe_to_event(EventType::Seeked, tx.clone(), PlayerManagerMessage::Seeked);
         self.subscribe_to_event(EventType::Rate, tx.clone(), PlayerManagerMessage::Rate);
@@ -218,7 +217,7 @@ impl PlayerManager {
 
             match msg.clone() {
                 PlayerManagerMessage::Metadata(mpris_metadata) => {
-                    self.handle_metadata_event(&mut players, mpris_metadata);
+                    self.handle_metadata_event(&mut players, *mpris_metadata);
                 }
                 PlayerManagerMessage::PlaybackState(mpris_playback) => {
                     if let Err(err) = timer_tx.send(msg) {
@@ -235,11 +234,6 @@ impl PlayerManager {
                 PlayerManagerMessage::Rate(_) => {
                     if let Err(err) = timer_tx.send(msg) {
                         warn!("PlayerManager: failed to re-send message to timer thread! {err}");
-                    }
-                }
-                PlayerManagerMessage::Identity(mpris_identity) => {
-                    if let Some(p) = players.get_mut(&mpris_identity.player_id) {
-                        p.set_name(mpris_identity.identity);
                     }
                 }
                 PlayerManagerMessage::PlayerTick((id, position)) => {

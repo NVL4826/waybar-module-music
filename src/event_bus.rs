@@ -9,8 +9,11 @@ pub enum EventType {
     PlaybackChanged,
     Seeked,
     Rate,
+    #[allow(dead_code)]
     Identity,
+    #[allow(dead_code)]
     ParseError,
+    #[allow(dead_code)]
     Unknown(String),
 }
 

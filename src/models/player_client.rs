@@ -29,12 +29,13 @@ impl PlayerClient {
         }
     }
 
+    #[allow(dead_code)]
     pub fn set_name(&mut self, name: String) {
         self.player_name = name;
         self.last_updated = Instant::now();
     }
 
-    pub fn name(&self) -> &String {
+    pub fn name(&self) -> &str {
         &self.player_name
     }
 

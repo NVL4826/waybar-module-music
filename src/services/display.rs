@@ -255,7 +255,7 @@ impl Display {
     }
 
     fn get_class(&self, state: &PlayerState) -> String {
-        if let Some(playing) = state.playing.clone() {
+        if let Some(playing) = state.playing {
             playing.to_string()
         } else {
             String::from("stopped")
@@ -282,7 +282,6 @@ impl Display {
             (
                 "icon",
                 match player_state
-                    .clone()
                     .playing
                     .unwrap_or(PlaybackState::Stopped)
                 {
@@ -387,7 +386,6 @@ impl Display {
 
         if player_state
             .playing
-            .clone()
             .is_some_and(|playback| playback == PlaybackState::Stopped)
             || player_state.playing.is_none()
         {

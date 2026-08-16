@@ -19,10 +19,7 @@ impl MprisPlayback {
     }
 
     pub fn is_playing(&self) -> bool {
-        self.playing
-            .clone()
-            .map(|elem| elem == PlaybackState::Playing)
-            .unwrap_or(false)
+        self.playing == Some(PlaybackState::Playing)
     }
 
     pub fn new_with_playing(player_id: String, playing: Option<PlaybackState>) -> Self {

@@ -187,13 +187,10 @@ impl DBusMonitor {
         }
 
         loop {
-            match conn.process(Duration::from_millis(1000)) {
-                Ok(res) => (),
-                Err(err) => warn!("failed to process DBus connection: {err}"),
+            if let Err(err) = conn.process(Duration::from_millis(1000)) {
+                warn!("failed to process DBus connection: {err}");
             }
         }
-
-        Ok(())
     }
 }
 
@@ -201,7 +198,9 @@ impl Runnable for DBusMonitor {
     fn run(self: Arc<Self>) -> JoinHandle<()> {
         thread::spawn(move || {
             info!("starting DBusMonitor thread");
-            let result = self.begin_monitoring();
+            if let Err(err) = self.begin_monitoring() {
+                error!("DBusMonitor failed: {err}");
+            }
             info!("DBusMonitor thread is stopping");
         })
     }

@@ -8,14 +8,20 @@ pub struct PlayerTimer {
     last_update: Instant,
 }
 
-impl PlayerTimer {
-    pub fn new() -> Self {
+impl Default for PlayerTimer {
+    fn default() -> Self {
         Self {
             playing: false,
             position: 0,
             rate: 1.0,
             last_update: Instant::now(),
         }
+    }
+}
+
+impl PlayerTimer {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn tick(&mut self, increment_ms: u128) {
@@ -53,6 +59,7 @@ impl PlayerTimer {
         self.playing
     }
 
+    #[allow(dead_code)]
     pub fn time_ms_since_last_update(&self) -> u128 {
         Instant::now().duration_since(self.last_update).as_millis()
     }

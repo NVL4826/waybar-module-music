@@ -14,13 +14,20 @@ pub struct DBusClient {
     conn: Connection,
 }
 
-impl DBusClient {
-    pub fn new() -> Self {
+impl Default for DBusClient {
+    fn default() -> Self {
         Self {
             conn: Connection::new_session().expect("failed to create DBus connection"),
         }
     }
+}
 
+impl DBusClient {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[allow(dead_code)]
     fn get_players(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let proxy = self
             .conn
@@ -80,6 +87,7 @@ impl DBusClient {
         )
     }
 
+    #[allow(dead_code)]
     fn call_player_method(
         &self,
         player_id: &str,
@@ -90,16 +98,19 @@ impl DBusClient {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn play_mpris_player(&self, player_id: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.call_player_method(player_id, "Play")?;
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn pause_mpris_player(&self, player_id: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.call_player_method(player_id, "Pause")?;
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn play_pause_mpris_player(
         &self,
         player_id: &str,
@@ -108,17 +119,21 @@ impl DBusClient {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn next_mpris_player(&self, player_id: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.call_player_method(player_id, "Next")?;
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn previous_mpris_player(&self, player_id: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.call_player_method(player_id, "Previous")?;
         Ok(())
     }
 }
 
+// SAFETY: DBus Connection uses internal thread-safe synchronization for D-Bus communication.
 unsafe impl Send for DBusClient {}
 
+// SAFETY: Methods on DBusClient take immutable references &self and DBus connection can be safely accessed.
 unsafe impl Sync for DBusClient {}
