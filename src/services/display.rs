@@ -60,7 +60,11 @@ impl Display {
     fn init_worker(self: Arc<Self>) {
         println!(
             "{}",
-            self.format_json_output(&self.args.stopped_label, "stopped")
+            self.format_json_output(
+                &self.args.stopped_label,
+                "trạng thái: đã dừng\nchuột trái: chuyển playlist",
+                "stopped"
+            )
         );
 
         let (tx, rx) = mpsc::channel();
@@ -259,12 +263,13 @@ impl Display {
     }
 
     /// Create the final output JSON, in the format that Waybar expects
-    fn format_json_output(&self, text: &str, class: &str) -> String {
+    fn format_json_output(&self, text: &str, tooltip: &str, class: &str) -> String {
         let text = self.escape_pango(text);
+        let tooltip = self.escape_pango(tooltip);
         let class = self.escape_pango(class);
         format!(
             "{{\"text\": \"{}\", \"tooltip\": \"{}\", \"class\": \"{}\", \"alt\": \"{}\"}}",
-            text, "", class, ""
+            text, tooltip, class, ""
         )
     }
 
@@ -351,7 +356,11 @@ impl Display {
             None => {
                 println!(
                     "{}",
-                    self.format_json_output(&self.args.stopped_label, "stopped")
+                    self.format_json_output(
+                        &self.args.stopped_label,
+                        "trạng thái: đã dừng\nchuột trái: chuyển playlist",
+                        "stopped"
+                    )
                 );
                 return;
             }
@@ -365,14 +374,43 @@ impl Display {
         {
             println!(
                 "{}",
-                self.format_json_output(&self.args.stopped_label, "stopped")
+                self.format_json_output(
+                    &self.args.stopped_label,
+                    "trạng thái: đã dừng\nchuột trái: chuyển playlist",
+                    "stopped"
+                )
             );
             return;
         }
 
+        let state_str = match player_state.playing {
+            Some(PlaybackState::Playing) => "đang phát",
+            Some(PlaybackState::Paused) => "tạm dừng",
+            _ => "đã dừng",
+        };
+        let duration_str = if player_state.length > 0 {
+            format!(
+                "{}/{}",
+                time::microseconds_to_formatted_time(player_state.position),
+                time::microseconds_to_formatted_time(player_state.length as u128)
+            )
+        } else {
+            "n/a".to_string()
+        };
+        let tooltip = format!(
+            "bài hát: {}\nnghệ sĩ: {}\nalbum: {}\ntrình phát: {}\nthời lượng: {}\ntrạng thái: {}\nchuột trái: chuyển playlist",
+            if player_state.title.is_empty() { "n/a" } else { &player_state.title },
+            if player_state.artist.is_empty() { "n/a" } else { &player_state.artist },
+            if player_state.album.is_empty() { "n/a" } else { &player_state.album },
+            if player_state.player_name.is_empty() { "mpd" } else { &player_state.player_name },
+            duration_str,
+            state_str
+        );
+
         let output = self.format_json_output(
             self.populate_using_placeholders(player_state, fields)
                 .trim(),
+            &tooltip,
             &self.get_class(player_state),
         );
 
