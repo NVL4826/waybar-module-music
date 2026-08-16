@@ -61,7 +61,7 @@ impl Display {
         println!(
             "{}",
             self.format_json_output(
-                &self.args.stopped_label,
+                self.get_stopped_label(),
                 "trạng thái: đã dừng\nchuột trái: chuyển playlist",
                 "stopped"
             )
@@ -293,10 +293,21 @@ impl Display {
             ),
             (
                 "title",
-                format!(
-                    "\u{2063}{}\u{2063}",
-                    fields.get_mut("title").unwrap().draw(&player_state.title)
-                ),
+                {
+                    let title_text = if player_state.title.trim().is_empty() {
+                        if !player_state.player_name.trim().is_empty() {
+                            player_state.player_name.clone()
+                        } else {
+                            "mpd".to_string()
+                        }
+                    } else {
+                        player_state.title.clone()
+                    };
+                    format!(
+                        "\u{2063}{}\u{2063}",
+                        fields.get_mut("title").unwrap().draw(&title_text)
+                    )
+                },
             ),
             (
                 "artist",
@@ -350,6 +361,14 @@ impl Display {
             })
     }
 
+    fn get_stopped_label(&self) -> &str {
+        if self.args.stopped_label.trim().is_empty() {
+            " mpd"
+        } else {
+            &self.args.stopped_label
+        }
+    }
+
     fn draw(&self, player_state: &Option<PlayerState>, fields: &mut HashMap<&str, TextEffect>) {
         let player_state = match player_state {
             Some(state) => state,
@@ -357,7 +376,7 @@ impl Display {
                 println!(
                     "{}",
                     self.format_json_output(
-                        &self.args.stopped_label,
+                        self.get_stopped_label(),
                         "trạng thái: đã dừng\nchuột trái: chuyển playlist",
                         "stopped"
                     )
@@ -375,7 +394,7 @@ impl Display {
             println!(
                 "{}",
                 self.format_json_output(
-                    &self.args.stopped_label,
+                    self.get_stopped_label(),
                     "trạng thái: đã dừng\nchuột trái: chuyển playlist",
                     "stopped"
                 )
@@ -407,9 +426,15 @@ impl Display {
             state_str
         );
 
+        let populated = self.populate_using_placeholders(player_state, fields);
+        let display_text = if populated.trim().is_empty() {
+            self.get_stopped_label()
+        } else {
+            populated.trim()
+        };
+
         let output = self.format_json_output(
-            self.populate_using_placeholders(player_state, fields)
-                .trim(),
+            display_text,
             &tooltip,
             &self.get_class(player_state),
         );
