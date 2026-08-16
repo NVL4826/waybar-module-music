@@ -162,7 +162,7 @@ impl PlayerManager {
             // e.g, on first run, delay the amount required to get an even, for example, 250ms difference
             // between the player and the module
             // we could also query the media player directly for its position every now and then
-            let increment_ms: u128 = 250;
+            let increment_ms: u128 = 1000;
             players
                 .iter_mut()
                 .filter(|(_, p)| p.is_playing())

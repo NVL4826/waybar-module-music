@@ -39,6 +39,7 @@ pub struct Display {
     args: Arc<Args>,
     config: Arc<Config>,
     event_bus: EventBusHandle,
+    last_output: std::sync::Mutex<String>,
 }
 
 impl Display {
@@ -47,18 +48,24 @@ impl Display {
             args,
             config,
             event_bus,
+            last_output: std::sync::Mutex::new(String::new()),
+        }
+    }
+
+    fn print_if_changed(&self, output: String) {
+        let mut last = self.last_output.lock().unwrap();
+        if *last != output {
+            *last = output.clone();
+            println!("{output}");
         }
     }
 
     fn init_worker(self: Arc<Self>) {
-        println!(
-            "{}",
-            self.format_json_output(
-                self.get_stopped_label(),
-                "trạng thái: đã dừng\nchuột trái: chuyển playlist",
-                "stopped"
-            )
-        );
+        self.print_if_changed(self.format_json_output(
+            self.get_stopped_label(),
+            "Trạng thái: Đã dừng\nChuột trái: Chuyển playlist",
+            "stopped",
+        ));
 
         let (tx, rx) = mpsc::channel();
         let (effect_tx, effect_rx) = mpsc::channel();
@@ -364,14 +371,12 @@ impl Display {
         let player_state = match player_state {
             Some(state) => state,
             None => {
-                println!(
-                    "{}",
-                    self.format_json_output(
-                        self.get_stopped_label(),
-                        "trạng thái: đã dừng\nchuột trái: chuyển playlist",
-                        "stopped"
-                    )
+                let output = self.format_json_output(
+                    self.get_stopped_label(),
+                    "Trạng thái: Đã dừng\nChuột trái: Chuyển playlist",
+                    "stopped",
                 );
+                self.print_if_changed(output);
                 return;
             }
         };
@@ -381,37 +386,39 @@ impl Display {
             .is_some_and(|playback| playback == PlaybackState::Stopped)
             || player_state.playing.is_none()
         {
-            println!(
-                "{}",
-                self.format_json_output(
-                    self.get_stopped_label(),
-                    "trạng thái: đã dừng\nchuột trái: chuyển playlist",
-                    "stopped"
-                )
+            let output = self.format_json_output(
+                self.get_stopped_label(),
+                "Trạng thái: Đã dừng\nChuột trái: Chuyển playlist",
+                "stopped",
             );
+            self.print_if_changed(output);
             return;
         }
 
         let state_str = match player_state.playing {
-            Some(PlaybackState::Playing) => "đang phát",
-            Some(PlaybackState::Paused) => "tạm dừng",
-            _ => "đã dừng",
+            Some(PlaybackState::Playing) => "Đang phát",
+            Some(PlaybackState::Paused) => "Tạm dừng",
+            _ => "Đã dừng",
         };
         let duration_str = if player_state.length > 0 {
-            format!(
-                "{}/{}",
-                time::microseconds_to_formatted_time(player_state.position),
+            if self.args.format.contains("%position%") {
+                format!(
+                    "{}/{}",
+                    time::microseconds_to_formatted_time(player_state.position),
+                    time::microseconds_to_formatted_time(player_state.length as u128)
+                )
+            } else {
                 time::microseconds_to_formatted_time(player_state.length as u128)
-            )
+            }
         } else {
-            "n/a".to_string()
+            "N/A".to_string()
         };
         let tooltip = format!(
-            "bài hát: {}\nnghệ sĩ: {}\nalbum: {}\ntrình phát: {}\nthời lượng: {}\ntrạng thái: {}\nchuột trái: chuyển playlist",
-            if player_state.title.is_empty() { "n/a" } else { &player_state.title },
-            if player_state.artist.is_empty() { "n/a" } else { &player_state.artist },
-            if player_state.album.is_empty() { "n/a" } else { &player_state.album },
-            if player_state.player_name.is_empty() { "mpd" } else { &player_state.player_name },
+            "Bài hát: {}\nNghệ sĩ: {}\nAlbum: {}\nTrình phát: {}\nThời lượng: {}\nTrạng thái: {}\nChuột trái: Chuyển playlist",
+            if player_state.title.is_empty() { "N/A" } else { &player_state.title },
+            if player_state.artist.is_empty() { "N/A" } else { &player_state.artist },
+            if player_state.album.is_empty() { "N/A" } else { &player_state.album },
+            if player_state.player_name.is_empty() { "MPD" } else { &player_state.player_name },
             duration_str,
             state_str
         );
@@ -429,7 +436,7 @@ impl Display {
             &self.get_class(player_state),
         );
 
-        println!("{}", output)
+        self.print_if_changed(output);
     }
 }
 
