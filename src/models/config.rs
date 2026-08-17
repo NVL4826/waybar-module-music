@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    fs::{self, File},
-    path::PathBuf,
-};
+use std::{collections::HashMap, fs, path::Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -34,7 +30,7 @@ impl Config {
         let config_dir = helpers::dir::get_and_create_dir(dirs::config_dir)?;
         let config_path = config_dir.join("config.toml");
 
-        if File::create_new(&config_path).is_ok() {
+        if !config_path.exists() {
             Config::create_default_config_file(&config_path)?;
             log::info!("No config file found, new created");
         }
@@ -43,7 +39,7 @@ impl Config {
         Ok(toml::from_str(&file_str)?)
     }
 
-    fn create_default_config_file(path: &PathBuf) -> Result<(), ConfigError> {
+    fn create_default_config_file(path: &Path) -> Result<(), ConfigError> {
         let doc_string = r"# You can configure unique text to display for any given player
 # It works by doing a partial match against a players name
 # So for Firefox for example, which is advertised as 'Mozilla Firefox', you'd want something like this:

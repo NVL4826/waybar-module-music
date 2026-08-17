@@ -27,12 +27,12 @@ impl PlayerClient {
         &self.player_name
     }
 
-    pub fn metadata(&self) -> MprisMetadata {
-        self.metadata.clone()
+    pub fn metadata(&self) -> &MprisMetadata {
+        &self.metadata
     }
 
-    pub fn playback_state(&self) -> Option<MprisPlayback> {
-        self.playback_state.clone()
+    pub fn playback_state(&self) -> Option<&MprisPlayback> {
+        self.playback_state.as_ref()
     }
 
     pub fn position(&self) -> u128 {

@@ -65,7 +65,7 @@ impl PlayerManager {
             }
 
             if let Some(active) = self.get_most_active_player(&players) {
-                self.publish_player_state(&active, &players);
+                self.publish_player_state(&active);
             }
         }
 
@@ -79,7 +79,7 @@ impl PlayerManager {
                             player.update_position(player.position() + 1_000_000);
                         }
                         if let Some(active) = self.get_most_active_player(&players) {
-                            self.publish_player_state(&active, &players);
+                            self.publish_player_state(&active);
                         }
                         continue;
                     }
@@ -129,7 +129,7 @@ impl PlayerManager {
         }
 
         if let Some(player) = players.get(&id) {
-            self.publish_player_state(player, players);
+            self.publish_player_state(player);
         }
     }
 
@@ -149,7 +149,7 @@ impl PlayerManager {
         }
 
         if let Some(active) = self.get_most_active_player(players) {
-            self.publish_player_state(&active, players);
+            self.publish_player_state(&active);
         }
     }
 
@@ -166,7 +166,7 @@ impl PlayerManager {
         }
 
         if let Some(player) = players.get(id) {
-            self.publish_player_state(player, players);
+            self.publish_player_state(player);
         }
     }
 
@@ -193,13 +193,9 @@ impl PlayerManager {
             .or_else(|| players.values().max_by_key(|p| p.last_updated).cloned())
     }
 
-    pub fn publish_player_state(
-        &self,
-        player: &PlayerClient,
-        _players: &HashMap<String, PlayerClient>,
-    ) {
+    pub fn publish_player_state(&self, player: &PlayerClient) {
         if let Some(state) = PlayerState::from_mpris_data(
-            player.name().to_owned(),
+            player.name(),
             player.metadata(),
             player.playback_state(),
             player.position(),
@@ -208,6 +204,7 @@ impl PlayerManager {
         }
     }
 }
+
 
 impl Runnable for PlayerManager {
     fn run(self: Arc<Self>) -> JoinHandle<()> {

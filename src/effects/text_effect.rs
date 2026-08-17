@@ -1,26 +1,11 @@
-use std::sync::{Arc, Mutex};
-
 use crate::effects::effect::Effect;
 
+#[derive(Default)]
 pub struct TextEffect {
     text: String,
     last_drawn: String,
-    effects: Arc<Mutex<Vec<Box<dyn Effect>>>>,
-    update_tick: Arc<Mutex<bool>>,
-}
-
-impl Default for TextEffect {
-    fn default() -> Self {
-        let update_tick = Arc::new(Mutex::new(false));
-        let effects = Arc::new(Mutex::new(vec![]));
-
-        Self {
-            text: String::new(),
-            last_drawn: String::new(),
-            effects,
-            update_tick,
-        }
-    }
+    effects: Vec<Box<dyn Effect>>,
+    update_tick: bool,
 }
 
 impl TextEffect {
@@ -30,19 +15,15 @@ impl TextEffect {
 
     pub fn set_effect_text(&mut self, text: String) {
         self.text = text.clone();
-        *self.update_tick.lock().unwrap() = true;
-        self.effects.lock().unwrap().iter_mut().for_each(|effect| {
+        self.update_tick = true;
+        for effect in &mut self.effects {
             effect.set_text(text.clone());
             effect.apply(text.clone());
-        });
+        }
     }
 
     pub fn has_active_effects(&self) -> bool {
-        self.effects
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|elem| elem.is_active())
+        self.effects.iter().any(|elem| elem.is_active())
     }
 
     pub fn current_text(&self) -> &str {
@@ -50,11 +31,11 @@ impl TextEffect {
     }
 
     pub fn should_redraw(&mut self) {
-        *self.update_tick.lock().unwrap() = true;
+        self.update_tick = true;
     }
 
-    pub fn with_effect(self, effect: Box<dyn Effect>) -> Self {
-        self.effects.lock().unwrap().push(effect);
+    pub fn with_effect(mut self, effect: Box<dyn Effect>) -> Self {
+        self.effects.push(effect);
         self
     }
 
@@ -67,20 +48,18 @@ impl TextEffect {
             self.last_drawn = text.to_string();
         }
 
-        for effect in self.effects.lock().unwrap().iter_mut() {
+        for effect in &mut self.effects {
             effect.set_text(text.to_string());
         }
 
-        let mut lock = self.update_tick.lock().unwrap();
-        if !*lock {
+        if !self.update_tick {
             return self.last_drawn.clone();
         }
 
-        *lock = false;
-        drop(lock);
+        self.update_tick = false;
 
         let mut result = text.to_owned();
-        for effect in self.effects.lock().unwrap().iter_mut() {
+        for effect in &mut self.effects {
             result = effect.apply(result);
         }
         if !result.is_empty() {
@@ -89,3 +68,4 @@ impl TextEffect {
         result
     }
 }
+
