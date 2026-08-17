@@ -1,9 +1,10 @@
 use std::error::Error;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use dbus::{
     arg::PropMap,
-    blocking::{stdintf::org_freedesktop_dbus::Properties, Connection, Proxy},
+    blocking::{stdintf::org_freedesktop_dbus::Properties, Connection},
 };
 
 use crate::models::{
@@ -11,13 +12,15 @@ use crate::models::{
 };
 
 pub struct DBusClient {
-    conn: Connection,
+    conn: Mutex<Connection>,
 }
 
 impl Default for DBusClient {
     fn default() -> Self {
         Self {
-            conn: Connection::new_session().expect("failed to create DBus connection"),
+            conn: Mutex::new(
+                Connection::new_session().expect("failed to create DBus connection"),
+            ),
         }
     }
 }
@@ -28,24 +31,23 @@ impl DBusClient {
     }
 
     pub fn get_players(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-        let proxy = self
-            .conn
-            .with_proxy("org.freedesktop.DBus", "/", Duration::from_millis(5000));
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let proxy = conn.with_proxy("org.freedesktop.DBus", "/", Duration::from_millis(5000));
 
         let (names,): (Vec<String>,) =
             proxy.method_call("org.freedesktop.DBus", "ListNames", ())?;
 
         let players: Vec<String> = names
-            .iter()
+            .into_iter()
             .filter(|name| name.contains("org.mpris.MediaPlayer2"))
-            .cloned()
             .collect();
 
         Ok(players)
     }
 
-    pub fn query_playback_status(&self, player_id: &str) -> Result<MprisPlayback, dbus::Error> {
-        let proxy = self.conn.with_proxy(
+    pub fn query_playback_status(&self, player_id: &str) -> Result<MprisPlayback, Box<dyn Error>> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let proxy = conn.with_proxy(
             player_id,
             "/org/mpris/MediaPlayer2",
             Duration::from_millis(5000),
@@ -58,7 +60,8 @@ impl DBusClient {
     }
 
     pub fn query_metadata(&self, player_id: &str) -> Result<MprisMetadata, Box<dyn Error>> {
-        let proxy = self.conn.with_proxy(
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let proxy = conn.with_proxy(
             player_id,
             "/org/mpris/MediaPlayer2",
             Duration::from_millis(5000),
@@ -72,23 +75,27 @@ impl DBusClient {
     }
 
     pub fn query_mediaplayer_identity(&self, player_id: &str) -> Result<String, Box<dyn Error>> {
-        let proxy = self.get_media_player_proxy(player_id);
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let proxy = conn.with_proxy(
+            player_id,
+            "/org/mpris/MediaPlayer2",
+            Duration::from_millis(5000),
+        );
         let identity: String = proxy.get("org.mpris.MediaPlayer2", "Identity")?;
 
         Ok(identity)
     }
+}
 
-    pub fn get_media_player_proxy<'a>(&'a self, player_id: &'a str) -> Proxy<'a, &'a Connection> {
-        self.conn.with_proxy(
-            player_id,
-            "/org/mpris/MediaPlayer2",
-            Duration::from_millis(5000),
-        )
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn test_dbus_client_is_send_and_sync() {
+        assert_send_sync::<DBusClient>();
     }
 }
 
-// SAFETY: DBus Connection uses internal thread-safe synchronization for D-Bus communication.
-unsafe impl Send for DBusClient {}
-
-// SAFETY: Methods on DBusClient take immutable references &self and DBus connection can be safely accessed.
-unsafe impl Sync for DBusClient {}
