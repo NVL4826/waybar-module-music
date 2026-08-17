@@ -73,6 +73,10 @@ waybar-module-mpd [OPTIONS]
 | `-H, --host <HOST>` | MPD server host (can use `MPD_HOST` env) | `127.0.0.1` |
 | `-p, --port <PORT>` | MPD server port (can use `MPD_PORT` env) | `6600` |
 | `-f, --format <TEMPLATE>` | Format template string (see placeholders below) | `[ %icon% ] %artist% - %title%` |
+| `-t, --title-width <WIDTH>` | Maximum title width before truncation (`0` = disable) | `0` |
+| `-a, --artist-width <WIDTH>` | Maximum artist width before truncation (`0` = disable) | `0` |
+| `--max-length <LENGTH>` | Maximum total text length before truncation (`0` = disable) | `0` |
+| `--ellipsis` | Enable ellipsis (`...`) when text is truncated | `false` |
 | `--play-icon <ICON>` | Play state icon | `` |
 | `--pause-icon <ICON>` | Pause state icon | `` |
 | `--stopped-icon <ICON>` | Stopped state icon | `` |
@@ -92,10 +96,15 @@ You can customize the text template using `-f` / `--format`:
 - `%duration%` - Total track duration (`mm:ss` or `hh:mm:ss`)
 - `%volume%` - Current volume percentage (e.g. `85%`)
 
-**Example:**
+**Examples:**
 ```bash
+# Truncate title to 30 characters with ellipsis
+waybar-module-mpd --format " %title%" --title-width 30 --ellipsis
+
+# Custom template with artist, title, and volume
 waybar-module-mpd --format "🎵 %artist% - %title% (%volume%)" --play-icon "▶" --pause-icon "⏸"
 ```
+
 
 ## 🎨 Styling
 
