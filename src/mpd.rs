@@ -217,6 +217,74 @@ impl MpdClient {
     }
 }
 
+/// Continuous event monitor that handles connection lifecycle, automatic retries, and idle event dispatch.
+pub struct MpdMonitor {
+    host: String,
+    port: u16,
+    reconnect_interval: Duration,
+}
+
+impl MpdMonitor {
+    pub fn new(host: impl Into<String>, port: u16) -> Self {
+        Self {
+            host: host.into(),
+            port,
+            reconnect_interval: Duration::from_secs(2),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn with_reconnect_interval(mut self, interval: Duration) -> Self {
+        self.reconnect_interval = interval;
+        self
+    }
+
+
+    /// Continuously monitors MPD, invoking `on_update` with `Some((status, song))` on state changes,
+    /// or `None` when MPD is disconnected or offline.
+    pub fn run<F>(&self, mut on_update: F)
+    where
+        F: FnMut(Option<(&MpdStatus, &MpdSong)>),
+    {
+        // Initial disconnected / stopped state
+        on_update(None);
+
+        loop {
+            log::debug!("Connecting to MPD at {}:{}", self.host, self.port);
+            match MpdClient::connect(&self.host, self.port, Duration::from_secs(2)) {
+                Ok(mut client) => {
+                    log::info!("Connected to MPD successfully");
+                    loop {
+                        match client.query_status_and_song() {
+                            Ok((status, song)) => {
+                                log::debug!("MPD state: {:?}, song: {:?}", status.state, song.title);
+                                on_update(Some((&status, &song)));
+                            }
+                            Err(err) => {
+                                log::warn!("Failed to query MPD status: {err}");
+                                break;
+                            }
+                        }
+
+                        // Block on MPD idle events (0% CPU, 0ms latency on changes)
+                        if let Err(err) = client.wait_for_idle() {
+                            log::warn!("MPD idle connection closed: {err}");
+                            break;
+                        }
+                    }
+                }
+                Err(err) => {
+                    log::debug!("Unable to connect to MPD: {err}");
+                }
+            }
+
+            // Connection lost / unavailable
+            on_update(None);
+            std::thread::sleep(self.reconnect_interval);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,4 +314,14 @@ mod tests {
         let empty = MpdSong::default();
         assert_eq!(empty.display_title(), "Không có tiêu đề");
     }
+
+    #[test]
+    fn test_mpd_monitor_builder() {
+        let monitor = MpdMonitor::new("127.0.0.1", 6600)
+            .with_reconnect_interval(Duration::from_millis(500));
+        assert_eq!(monitor.host, "127.0.0.1");
+        assert_eq!(monitor.port, 6600);
+        assert_eq!(monitor.reconnect_interval, Duration::from_millis(500));
+    }
 }
+
