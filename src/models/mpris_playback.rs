@@ -1,5 +1,4 @@
 use dbus::Message;
-use log::{error, warn};
 
 use crate::models::playback_state::PlaybackState;
 
@@ -26,27 +25,47 @@ impl MprisPlayback {
     }
 
     pub fn from_dbus_message(msg: &Message) -> Self {
-        let mut result = MprisPlayback::new(msg.sender().unwrap().to_string());
+        let sender = msg.sender().map(|s| s.to_string()).unwrap_or_default();
+        let mut result = MprisPlayback::new(sender);
 
         for elem in msg.iter_init() {
-            if let Some(args) = elem.as_iter() {
-                if let Some(kv) = args.collect::<Vec<_>>().chunks(2).next() {
-                    if let (Some(key), Some(value)) = (kv[0].as_str(), kv[1].as_str()) {
-                        if key != "PlaybackStatus" {
-                            warn!("tried to create MprisPlayback but message does not conform to expected format");
+            if let Some(dict) = elem.as_iter() {
+                let mut iter = dict;
+                while let Some(k) = iter.next() {
+                    let v = match iter.next() {
+                        Some(v) => v,
+                        None => break,
+                    };
+                    if let (Some(key), Some(value)) = (k.as_str(), v.as_str()) {
+                        if key == "PlaybackStatus" {
+                            result.playing = PlaybackState::from_string(value);
                             return result;
                         }
-                        result.playing = PlaybackState::from_string(value);
-                        return result;
-                    } else {
-                        warn!("got unexpected key-value pair, types do not conform to expected format: {:?}", kv);
-                        return result;
                     }
                 }
-            };
+            }
         }
 
-        error!("got to end of MprisPlayback constructor without returning during construction, this should not happen");
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_playback_from_message_without_sender_does_not_panic() {
+        let msg = Message::new_signal(
+            "/org/mpris/MediaPlayer2",
+            "org.freedesktop.DBus.Properties",
+            "PropertiesChanged",
+        )
+        .unwrap();
+
+        let playback = MprisPlayback::from_dbus_message(&msg);
+        assert_eq!(playback.player_id, "");
+        assert_eq!(playback.playing, None);
+    }
+}
+

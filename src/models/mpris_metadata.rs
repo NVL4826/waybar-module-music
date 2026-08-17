@@ -58,38 +58,31 @@ impl MprisMetadata {
     }
 
     pub fn from_dbus_message(msg: &Message) -> Self {
-        let mut result = MprisMetadata::new(msg.sender().unwrap().to_string());
+        let sender = msg.sender().map(|s| s.to_string()).unwrap_or_default();
+        let mut result = MprisMetadata::new(sender);
 
-        // FIXME: this is ugly...
-        for msg in msg.iter_init() {
-            if let Some(dict) = msg.as_iter() {
-                for chunk in dict.collect::<Vec<_>>().chunks(2) {
-                    // only handle key-value pairs
-                    if chunk.len() != 2 {
+        for msg_arg in msg.iter_init() {
+            if let Some(dict) = msg_arg.as_iter() {
+                let mut iter = dict;
+                while let Some(key_arg) = iter.next() {
+                    let val_arg = match iter.next() {
+                        Some(v) => v,
+                        None => break,
+                    };
+                    if key_arg.as_str() != Some("Metadata") {
                         continue;
                     }
 
-                    if let (Some(key), value) = (chunk[0].as_str(), &chunk[1]) {
-                        if key != "Metadata" {
-                            continue;
-                        }
-
-                        if let Some(metadata_dict) = value.as_iter() {
-                            for m in metadata_dict.collect::<Vec<_>>().iter() {
-                                if let Some(metadata_item) = m.as_iter() {
-                                    for metadata_item_chunk in
-                                        metadata_item.collect::<Vec<_>>().chunks(2)
-                                    {
-                                        if metadata_item_chunk.len() != 2 {
-                                            continue;
-                                        }
-
-                                        if let Some(meta_key) = metadata_item_chunk[0].as_str() {
-                                            result.set_field(
-                                                meta_key,
-                                                Variant(metadata_item_chunk[1].box_clone()),
-                                            );
-                                        }
+                    if let Some(metadata_dict) = val_arg.as_iter() {
+                        for m in metadata_dict {
+                            if let Some(entry_iter) = m.as_iter() {
+                                let mut entry = entry_iter;
+                                if let (Some(meta_k), Some(meta_v)) = (entry.next(), entry.next()) {
+                                    if let Some(meta_key) = meta_k.as_str() {
+                                        result.set_field(
+                                            meta_key,
+                                            Variant(meta_v.box_clone()),
+                                        );
                                     }
                                 }
                             }
@@ -110,3 +103,24 @@ impl MprisMetadata {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_metadata_from_message_without_sender_does_not_panic() {
+        let msg = Message::new_signal(
+            "/org/mpris/MediaPlayer2",
+            "org.freedesktop.DBus.Properties",
+            "PropertiesChanged",
+        )
+        .unwrap();
+
+        // sender() is None
+        let meta = MprisMetadata::from_dbus_message(&msg);
+        assert_eq!(meta.player_id, "");
+        assert_eq!(meta.title, None);
+    }
+}
+
