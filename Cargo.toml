@@ -1,10 +1,11 @@
 [package]
-name = "waybar-module-music"
+name = "waybar-module-mpd"
 version = "0.5.0"
 edition = "2021"
 description = "MPD music module for Waybar"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/Andeskjerf/waybar-module-music"
+repository = "https://github.com/NVL4826/waybar-module-mpd"
+
 
 [profile.release]
 lto = true

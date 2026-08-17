@@ -1,20 +1,16 @@
-# waybar-module-music
+# waybar-module-mpd
 
-A lightweight, zero-CPU Music Player Daemon (MPD) monitoring module for Waybar written in Rust.
+An MPD (Music Player Daemon) music monitoring module for Waybar written in Rust.
 
-Built with an event-driven architecture using MPD's native socket protocol (`idle`) to provide instantaneous updates with zero CPU overhead.
+Built with an event-driven architecture using MPD's native socket protocol (`idle`) to provide instantaneous updates.
 
 ## ✨ Features
 
-- **⚡ Zero CPU Usage & Instant Updates** - Uses MPD's socket `idle` event notification instead of continuous polling or animation timers.
-- **🎨 Waybar Integration** - Standard single-line JSON output with CSS classes (`playing`, `paused`, `stopped`) and rich tooltips.
-- **⏱️ Smart Duration & Volume Tooltip** - Displays song title, artist, album, track duration (`mm:ss` or `hh:mm:ss`), and current MPD volume.
-- **🎛️ Highly Configurable** - Custom format template strings, icons, MPD server host/port, and stopped state labels.
-- **🦀 Pure Rust** - No external C dependencies or D-Bus daemon requirements.
-
-## 🚀 Performance
-
-Unlike polling-based scripts or high-frequency animation loops, `waybar-module-music` connects directly to MPD's TCP socket and blocks on the `idle` command. The process sleeps at **0% CPU** and only wakes up when MPD changes track, playback state, or volume.
+- **Event-driven updates** - Uses MPD's socket `idle` event notification instead of continuous polling.
+- **Waybar integration** - Single-line JSON output with CSS classes (`playing`, `paused`, `stopped`) and rich tooltips.
+- **Duration & Volume tooltip** - Displays song title, artist, album, track duration (`mm:ss` or `hh:mm:ss`), and MPD volume.
+- **Configurable** - Custom format template strings, icons, MPD server host/port, and stopped state labels.
+- **Pure Rust** - No external C dependencies or D-Bus daemon requirements.
 
 ## 📦 Installation
 
@@ -23,12 +19,20 @@ Unlike polling-based scripts or high-frequency animation loops, `waybar-module-m
 Ensure you have Rust and Cargo installed:
 
 ```bash
-git clone https://github.com/Andeskjerf/waybar-module-music.git
-cd waybar-module-music
+git clone https://github.com/NVL4826/waybar-module-mpd.git
+cd waybar-module-mpd
 cargo build --release
 
 # Copy to your PATH
-cp target/release/waybar-module-music ~/.local/bin/
+cp target/release/waybar-module-mpd ~/.local/bin/
+```
+
+### Arch Linux (PKGBUILD)
+
+```bash
+git clone https://github.com/NVL4826/waybar-module-mpd.git
+cd waybar-module-mpd/dist/arch
+makepkg -si
 ```
 
 ## ⚙️ Configuration
@@ -42,7 +46,7 @@ Add the custom module to your Waybar configuration (`~/.config/waybar/config`):
   "custom/music": {
     "format": "{}",
     "return-type": "json",
-    "exec": "waybar-module-music",
+    "exec": "waybar-module-mpd",
     "on-click": "mpc toggle",
     "on-scroll-up": "mpc volume +5",
     "on-scroll-down": "mpc volume -5"
@@ -61,7 +65,7 @@ Include it in your bar modules list:
 ### CLI Options
 
 ```bash
-waybar-module-music [OPTIONS]
+waybar-module-mpd [OPTIONS]
 ```
 
 | Option | Description | Default |
@@ -90,7 +94,7 @@ You can customize the text template using `-f` / `--format`:
 
 **Example:**
 ```bash
-waybar-module-music --format "🎵 %artist% - %title% (%volume%)" --play-icon "▶" --pause-icon "⏸"
+waybar-module-mpd --format "🎵 %artist% - %title% (%volume%)" --play-icon "▶" --pause-icon "⏸"
 ```
 
 ## 🎨 Styling
@@ -124,11 +128,12 @@ The module provides CSS classes for theming in your Waybar stylesheet (`~/.confi
 
 Logs are written to:
 ```bash
-~/.cache/waybar-module-music/app.log
+~/.cache/waybar-module-mpd/app.log
 ```
 
 Run with `--debug` to enable verbose logging when diagnosing connection issues with your MPD instance:
 ```bash
-waybar-module-music --debug
+waybar-module-mpd --debug
 ```
+
 

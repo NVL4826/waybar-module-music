@@ -2,11 +2,12 @@ use clap::Parser;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
-    name = "waybar-module-music",
-    about = "Lightweight MPD music module for Waybar",
+    name = "waybar-module-mpd",
+    about = "MPD music module for Waybar",
     version
 )]
 pub struct Args {
+
     /// MPD server host
     #[arg(short = 'H', long, default_value = "127.0.0.1", env = "MPD_HOST")]
     pub host: String,

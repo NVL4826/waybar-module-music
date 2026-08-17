@@ -1,40 +1,47 @@
-pkgname=waybar-module-music-git
-pkgver=0.4.1_r235.39e4371
+pkgname=waybar-module-mpd-git
+pkgver=0.5.0_r235.39e4371
 pkgrel=1
-pkgdesc='A Waybar module to show & control the current MPRIS media players state'
-arch=('x86_64')
-url="https://github.com/Andeskjerf/waybar-module-music"
-license=('GPL3')
-depends=('dbus')
-makedepends=('rust' 'git')
-optdepends=('waybar: for integration with Waybar')
-source=("${pkgname}::git+https://github.com/Andeskjerf/waybar-module-music.git")
+pkgdesc='MPD music module for Waybar'
+arch=('x86_64' 'aarch64')
+url="https://github.com/NVL4826/waybar-module-mpd"
+license=('GPL-3.0-or-later')
+depends=('gcc-libs')
+makedepends=('cargo' 'git')
+optdepends=(
+  'waybar: for integration with Waybar'
+  'mpd: music player daemon'
+)
+provides=('waybar-module-mpd')
+conflicts=('waybar-module-mpd' 'waybar-module-music')
+source=("${pkgname}::git+https://github.com/NVL4826/waybar-module-mpd.git")
 sha256sums=('SKIP')
-provides=('waybar-module-music')
-conflicts=('waybar-module-music')
 
 pkgver() {
-  cd ${pkgname}
+  cd "${pkgname}"
   cargo_version=$(grep '^version' Cargo.toml | head -n1 | cut -d'"' -f2)
   printf "${cargo_version}_r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 prepare() {
-  cd ${pkgname}
+  cd "${pkgname}"
   cargo fetch --target "$CARCH-unknown-linux-gnu"
 }
 
 build() {
-  cd ${pkgname}
+  cd "${pkgname}"
   cargo build --frozen --release --all-features
 }
 
 check() {
-  cd ${pkgname}
+  cd "${pkgname}"
   cargo test --frozen --offline
 }
 
 package() {
-  cd ${pkgname}
-  install -Dt "$pkgdir"/usr/bin ${CARGO_TARGET_DIR:-target}/release/waybar-module-music
+  cd "${pkgname}"
+  install -Dm755 "${CARGO_TARGET_DIR:-target}/release/waybar-module-mpd" "$pkgdir/usr/bin/waybar-module-mpd"
+  if [ -f LICENSE.md ]; then
+    install -Dm644 LICENSE.md "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  fi
 }
+

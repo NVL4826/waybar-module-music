@@ -14,7 +14,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let _ = logger::init_logger(args.debug);
 
-    info!("Starting waybar-module-music for MPD ({}:{})", args.host, args.port);
+    info!("Starting waybar-module-mpd ({}:{})", args.host, args.port);
+
 
     let display = WaybarDisplay::new();
     let monitor = MpdMonitor::new(&args.host, args.port);

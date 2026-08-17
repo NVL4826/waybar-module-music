@@ -8,7 +8,7 @@ where
 {
     let directory = callback()
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "could not get directory"))?
-        .join("waybar-module-music");
+        .join("waybar-module-mpd");
 
     fs::create_dir_all(&directory)?;
     Ok(directory)
@@ -38,12 +38,12 @@ mod tests {
 
     #[test]
     fn test_get_and_create_dir_success() {
-        let temp_base = env::temp_dir().join("test_waybar_music_log_dir");
+        let temp_base = env::temp_dir().join("test_waybar_mpd_log_dir");
         let result = get_and_create_dir(|| Some(temp_base.clone()));
         assert!(result.is_ok());
         let path = result.unwrap();
         assert!(path.exists());
-        assert!(path.ends_with("waybar-module-music"));
+        assert!(path.ends_with("waybar-module-mpd"));
         let _ = fs::remove_dir_all(temp_base);
     }
 
@@ -54,3 +54,4 @@ mod tests {
         assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::NotFound);
     }
 }
+
