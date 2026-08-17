@@ -1,9 +1,7 @@
-use bincode::config;
-use log::{debug, error, info, warn};
+use log::{debug, info};
 
 use crate::{
     effects::{ellipsis::Ellipsis, marquee::Marquee, text_effect::TextEffect},
-    event_bus::{EventBusHandle, EventType},
     models::{
         args::Args, config::Config, playback_state::PlaybackState, player_state::PlayerState,
     },
@@ -15,7 +13,7 @@ use std::{
     collections::HashMap,
     sync::{
         mpsc::{self, Receiver, Sender},
-        Arc,
+        Arc, Mutex,
     },
     thread,
     time::Duration,
@@ -38,17 +36,17 @@ struct WaybarOutput<'a> {
 pub struct Display {
     args: Arc<Args>,
     config: Arc<Config>,
-    event_bus: EventBusHandle,
-    last_output: std::sync::Mutex<String>,
+    player_rx: Mutex<Option<Receiver<PlayerState>>>,
+    last_output: Mutex<String>,
 }
 
 impl Display {
-    pub fn new(args: Arc<Args>, config: Arc<Config>, event_bus: EventBusHandle) -> Self {
+    pub fn new(args: Arc<Args>, config: Arc<Config>, player_rx: Receiver<PlayerState>) -> Self {
         Self {
             args,
             config,
-            event_bus,
-            last_output: std::sync::Mutex::new(String::new()),
+            player_rx: Mutex::new(Some(player_rx)),
+            last_output: Mutex::new(String::new()),
         }
     }
 
@@ -63,37 +61,43 @@ impl Display {
     fn init_worker(self: Arc<Self>) {
         self.print_if_changed(self.format_json_output(
             self.get_stopped_label(),
-            "Trạng thái: Đã dừng\nChuột trái: Chuyển playlist",
+            "Đã dừng",
             "stopped",
         ));
+
+        let player_rx = match self.player_rx.lock().unwrap().take() {
+            Some(rx) => rx,
+            None => return,
+        };
 
         let (tx, rx) = mpsc::channel();
         let (effect_tx, effect_rx) = mpsc::channel();
 
-        if let Some(rx) = self.event_bus.subscribe(EventType::PlayerStateChanged) {
-            let tx = tx.clone();
-            thread::spawn(move || {
-                Display::listen_player_state(rx, tx);
-            });
-        } else {
-            error!("failed to subscribe to PlayerStateChanged listener");
-        }
+        // Forward player state changes
+        let tx_state = tx.clone();
+        thread::spawn(move || {
+            while let Ok(state) = player_rx.recv() {
+                if tx_state.send(DisplayMessages::PlayerStateChanged(state)).is_err() {
+                    break;
+                }
+            }
+        });
 
-        {
-            let tx = tx.clone();
+        // Only start effect timer thread if marquee animation is enabled
+        if self.args.marquee {
+            let tx_anim = tx;
             let effect_speed = self.args.effect_speed as u64;
             thread::spawn(move || {
-                Display::text_effect_timer(effect_speed, effect_rx, tx);
+                Display::text_effect_timer(effect_speed, effect_rx, tx_anim);
             });
         }
 
         self.listen_for_updates(rx, effect_tx, self.init_fields());
     }
 
-    fn init_fields(&self) -> HashMap<&str, TextEffect> {
+    fn init_fields(&self) -> HashMap<&'static str, TextEffect> {
         let mut fields = HashMap::new();
 
-        // FIXME: I'm sure this could be done better
         if self.args.marquee {
             fields.insert(
                 "title",
@@ -139,8 +143,8 @@ impl Display {
         loop {
             if active_effects {
                 thread::sleep(Duration::from_millis(interval_ms));
-                if let Err(err) = tx.send(DisplayMessages::AnimationDue) {
-                    warn!("failed to send AnimationDue message: {err}");
+                if tx.send(DisplayMessages::AnimationDue).is_err() {
+                    break;
                 }
                 active_effects = match effect_rx.try_recv() {
                     Ok(msg) => msg,
@@ -150,48 +154,22 @@ impl Display {
                 debug!("waiting for effect trigger to continue effect timer");
                 active_effects = match effect_rx.recv() {
                     Ok(msg) => msg,
-                    Err(err) => {
-                        error!("failed to receieve effect message: {err}");
-                        false
-                    }
+                    Err(_) => break,
                 };
-                debug!("got effect trigger message: {active_effects}");
             }
         }
     }
 
-    fn listen_player_state(rx: Receiver<Vec<u8>>, tx: Sender<DisplayMessages>) {
-        loop {
-            let msg = rx.recv();
-            let (state, _): (PlayerState, usize) = match msg {
-                Ok(encoded) => {
-                    bincode::decode_from_slice(&encoded[..], config::standard()).unwrap()
-                }
-                Err(err) => {
-                    warn!("failed to decode message in Display: {err}");
-                    continue;
-                }
-            };
-
-            if let Err(err) = tx.send(DisplayMessages::PlayerStateChanged(state)) {
-                warn!("failed to send DisplayMessages: {err}");
+    fn set_text_effect_field(fields: &mut HashMap<&'static str, TextEffect>, value: &str, field: &'static str) {
+        if let Some(field) = fields.get_mut(field) {
+            if field.current_text() != value {
+                field.set_effect_text(value.to_string());
+                field.override_last_drawn(value.to_string());
             }
         }
     }
 
-    fn set_text_effect_field(fields: &mut HashMap<&str, TextEffect>, value: &str, field: &str) {
-        match fields.get_mut(field) {
-            Some(field) => {
-                if field.current_text() != value {
-                    field.set_effect_text(value.to_string());
-                    field.override_last_drawn(value.to_string());
-                }
-            }
-            None => error!("failed to get '{field}' field"),
-        }
-    }
-
-    fn should_effects_be_redrawn(&self, fields: &HashMap<&str, TextEffect>) -> bool {
+    fn should_effects_be_redrawn(&self, fields: &HashMap<&'static str, TextEffect>) -> bool {
         fields.iter().any(|(_, v)| v.has_active_effects())
     }
 
@@ -199,21 +177,11 @@ impl Display {
         &self,
         rx: Receiver<DisplayMessages>,
         effect_tx: Sender<bool>,
-        mut fields: HashMap<&str, TextEffect>,
+        mut fields: HashMap<&'static str, TextEffect>,
     ) {
         let mut player_state: Option<PlayerState> = None;
 
-        loop {
-            let msg = match rx.recv() {
-                Ok(msg) => msg,
-                Err(err) => {
-                    warn!("failed to recieve message: {err}");
-                    continue;
-                }
-            };
-
-            debug!("msg receieved: {:?}", msg);
-
+        while let Ok(msg) = rx.recv() {
             match msg {
                 DisplayMessages::PlayerStateChanged(state) => {
                     Display::set_text_effect_field(&mut fields, &state.title, "title");
@@ -238,16 +206,16 @@ impl Display {
                     );
                     player_state = Some(state);
                     self.draw(&player_state, &mut fields);
-                    if let Err(err) = effect_tx.send(self.should_effects_be_redrawn(&fields)) {
-                        error!("failed to notify effects thread: {err}");
+                    if self.args.marquee {
+                        let _ = effect_tx.send(self.should_effects_be_redrawn(&fields));
                     }
                 }
                 DisplayMessages::AnimationDue => {
                     if self.should_effects_be_redrawn(&fields) {
-                        fields.iter_mut().for_each(|(_, v)| {
+                        for (_, v) in fields.iter_mut() {
                             v.should_redraw();
-                        });
-                        self.draw(&player_state, &mut fields)
+                        }
+                        self.draw(&player_state, &mut fields);
                     }
                 }
             }
@@ -281,82 +249,50 @@ impl Display {
     fn populate_using_placeholders(
         &self,
         player_state: &PlayerState,
-        fields: &mut HashMap<&str, TextEffect>,
+        fields: &mut HashMap<&'static str, TextEffect>,
     ) -> String {
-        let replacements: HashMap<&str, String> = [
-            (
-                "icon",
-                match player_state
-                    .playing
-                    .unwrap_or(PlaybackState::Stopped)
-                {
-                    PlaybackState::Playing => self.args.play_icon.clone(),
-                    PlaybackState::Paused => self.args.pause_icon.clone(),
-                    PlaybackState::Stopped => self.args.pause_icon.clone(),
-                },
-            ),
-            (
-                "title",
-                {
-                    let title_text = if player_state.title.trim().is_empty() {
-                        if !player_state.player_name.trim().is_empty() {
-                            player_state.player_name.clone()
-                        } else {
-                            "mpd".to_string()
-                        }
-                    } else {
-                        player_state.title.clone()
-                    };
-                    fields.get_mut("title").unwrap().draw(&title_text)
-                },
-            ),
-            (
-                "artist",
-                fields.get_mut("artist").unwrap().draw(&player_state.artist),
-            ),
-            (
-                "album",
-                fields.get_mut("album").unwrap().draw(&player_state.album),
-            ),
-            (
-                "player",
-                fields
-                    .get_mut("player")
-                    .unwrap()
-                    .draw(&player_state.player_name),
-            ),
-            (
-                "player-icon",
-                fields.get_mut("player-icon").unwrap().draw(
-                    self.config
-                        .get_player_icon_by_partial_match(&player_state.player_name),
-                ),
-            ),
-            (
-                "length",
-                fields
-                    .get_mut("length")
-                    .unwrap()
-                    .draw(&time::microseconds_to_formatted_time(
-                        player_state.length as u128,
-                    )),
-            ),
-            (
-                "position",
-                fields
-                    .get_mut("position")
-                    .unwrap()
-                    .draw(&time::microseconds_to_formatted_time(player_state.position)),
-            ),
-        ]
-        .into_iter()
-        .collect();
+        let title_text = if player_state.title.trim().is_empty() {
+            if !player_state.player_name.trim().is_empty() {
+                player_state.player_name.clone()
+            } else {
+                "MPD".to_string()
+            }
+        } else {
+            player_state.title.clone()
+        };
 
-        replacements
-            .iter()
-            .fold(self.args.format.clone(), |acc, (key, value)| {
-                acc.replace(&format!("%{key}%"), value)
-            })
+        let icon = match player_state.playing.unwrap_or(PlaybackState::Stopped) {
+            PlaybackState::Playing => &self.args.play_icon,
+            PlaybackState::Paused | PlaybackState::Stopped => &self.args.pause_icon,
+        };
+
+        let title = fields.get_mut("title").unwrap().draw(&title_text);
+        let artist = fields.get_mut("artist").unwrap().draw(&player_state.artist);
+        let album = fields.get_mut("album").unwrap().draw(&player_state.album);
+        let player = fields.get_mut("player").unwrap().draw(&player_state.player_name);
+        let player_icon = fields
+            .get_mut("player-icon")
+            .unwrap()
+            .draw(self.config.get_player_icon_by_partial_match(&player_state.player_name));
+        let length = fields
+            .get_mut("length")
+            .unwrap()
+            .draw(&time::microseconds_to_formatted_time(player_state.length as u128));
+        let position = fields
+            .get_mut("position")
+            .unwrap()
+            .draw(&time::microseconds_to_formatted_time(player_state.position));
+
+        self.args
+            .format
+            .replace("%icon%", icon)
+            .replace("%title%", &title)
+            .replace("%artist%", &artist)
+            .replace("%album%", &album)
+            .replace("%player%", &player)
+            .replace("%player-icon%", &player_icon)
+            .replace("%length%", &length)
+            .replace("%position%", &position)
     }
 
     fn get_stopped_label(&self) -> &str {
@@ -367,13 +303,13 @@ impl Display {
         }
     }
 
-    fn draw(&self, player_state: &Option<PlayerState>, fields: &mut HashMap<&str, TextEffect>) {
+    fn draw(&self, player_state: &Option<PlayerState>, fields: &mut HashMap<&'static str, TextEffect>) {
         let player_state = match player_state {
             Some(state) => state,
             None => {
                 let output = self.format_json_output(
                     self.get_stopped_label(),
-                    "Trạng thái: Đã dừng\nChuột trái: Chuyển playlist",
+                    "Đã dừng",
                     "stopped",
                 );
                 self.print_if_changed(output);
@@ -388,18 +324,25 @@ impl Display {
         {
             let output = self.format_json_output(
                 self.get_stopped_label(),
-                "Trạng thái: Đã dừng\nChuột trái: Chuyển playlist",
+                "Đã dừng",
                 "stopped",
             );
             self.print_if_changed(output);
             return;
         }
 
-        let state_str = match player_state.playing {
-            Some(PlaybackState::Playing) => "Đang phát",
-            Some(PlaybackState::Paused) => "Tạm dừng",
-            _ => "Đã dừng",
+        let title = player_state.title.trim();
+        let artist = player_state.artist.trim();
+        let song_line = if !title.is_empty() && !artist.is_empty() && artist != "N/A" && artist != "n/a" {
+            format!("{title} - {artist}")
+        } else if !title.is_empty() {
+            title.to_string()
+        } else if !artist.is_empty() && artist != "N/A" && artist != "n/a" {
+            artist.to_string()
+        } else {
+            "Không có tiêu đề".to_string()
         };
+
         let duration_str = if player_state.length > 0 {
             if self.args.format.contains("%position%") {
                 format!(
@@ -411,17 +354,30 @@ impl Display {
                 time::microseconds_to_formatted_time(player_state.length as u128)
             }
         } else {
-            "N/A".to_string()
+            String::new()
         };
-        let tooltip = format!(
-            "Bài hát: {}\nNghệ sĩ: {}\nAlbum: {}\nTrình phát: {}\nThời lượng: {}\nTrạng thái: {}\nChuột trái: Chuyển playlist",
-            if player_state.title.is_empty() { "N/A" } else { &player_state.title },
-            if player_state.artist.is_empty() { "N/A" } else { &player_state.artist },
-            if player_state.album.is_empty() { "N/A" } else { &player_state.album },
-            if player_state.player_name.is_empty() { "MPD" } else { &player_state.player_name },
-            duration_str,
-            state_str
-        );
+
+        let volume_opt = crate::utils::mpd::get_mpd_volume();
+
+        let stats_line = match (duration_str.is_empty(), volume_opt) {
+            (false, Some(vol)) => format!("Thời lượng: {duration_str}  •  Âm lượng: {vol}%"),
+            (false, None) => format!("Thời lượng: {duration_str}"),
+            (true, Some(vol)) => format!("Âm lượng: {vol}%"),
+            (true, None) => String::new(),
+        };
+
+        let album = player_state.album.trim();
+        let mut tooltip_lines = vec![song_line];
+
+        if !album.is_empty() && album != "N/A" && album != "n/a" {
+            tooltip_lines.push(format!("Album: {album}"));
+        }
+
+        if !stats_line.is_empty() {
+            tooltip_lines.push(stats_line);
+        }
+
+        let tooltip = tooltip_lines.join("\n");
 
         let populated = self.populate_using_placeholders(player_state, fields);
         let display_text = if populated.trim().is_empty() {

@@ -1,267 +1,110 @@
-use bincode::config;
-use log::{debug, error, info, warn};
+use log::info;
 
 use crate::{
-    event_bus::{EventBusHandle, EventType},
     interfaces::dbus_client::DBusClient,
     models::{
-        mpris_metadata::MprisMetadata, mpris_playback::MprisPlayback, mpris_rate::MprisRate,
+        mpris_event::MprisEvent, mpris_metadata::MprisMetadata, mpris_playback::MprisPlayback,
         mpris_seeked::MprisSeeked, player_client::PlayerClient, player_state::PlayerState,
-        player_timer::PlayerTimer,
     },
     services::runnable::Runnable,
 };
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::HashMap,
     sync::{
-        mpsc::{self, Receiver, Sender},
-        Arc,
+        mpsc::{Receiver, Sender},
+        Arc, Mutex,
     },
     thread::{self, JoinHandle},
-    time::{Duration, Instant},
+    time::Duration,
 };
-
-#[derive(Debug, Clone)]
-enum PlayerManagerMessage {
-    Metadata(Box<MprisMetadata>),
-    PlaybackState(MprisPlayback),
-    Seeked(MprisSeeked),
-    Rate(MprisRate),
-    PlayerTick((String, u128)),
-}
 
 pub struct PlayerManager {
     dbus_client: Arc<DBusClient>,
-    event_bus: EventBusHandle,
+    event_rx: Mutex<Option<Receiver<MprisEvent>>>,
+    display_tx: Sender<PlayerState>,
 }
 
 impl PlayerManager {
-    pub fn new(event_bus: EventBusHandle, dbus_client: Arc<DBusClient>) -> Self {
+    pub fn new(
+        event_rx: Receiver<MprisEvent>,
+        display_tx: Sender<PlayerState>,
+        dbus_client: Arc<DBusClient>,
+    ) -> Self {
         Self {
             dbus_client,
-            event_bus,
+            event_rx: Mutex::new(Some(event_rx)),
+            display_tx,
         }
     }
 
-    fn init_worker(self: Arc<Self>) {
-        let (timer_tx, timer_rx) = mpsc::channel();
-        let (tx, rx) = mpsc::channel();
+    fn init_worker(&self) {
+        let event_rx = match self.event_rx.lock().unwrap().take() {
+            Some(rx) => rx,
+            None => return,
+        };
 
-        // we spawn a dedicated thread to tick player progress
-        {
-            let player_manager = self.clone();
-            let tx = tx.clone();
-            thread::spawn(move || player_manager.update_player_progress(tx, timer_rx));
-        }
+        let mut players: HashMap<String, PlayerClient> = HashMap::new();
 
-        self.subscribe_to_event(
-            EventType::PlaybackChanged,
-            tx.clone(),
-            PlayerManagerMessage::PlaybackState,
-        );
-        self.subscribe_to_event(
-            EventType::PlayerSongChanged,
-            tx.clone(),
-            |m| PlayerManagerMessage::Metadata(Box::new(m)),
-        );
-        self.subscribe_to_event(EventType::Seeked, tx.clone(), PlayerManagerMessage::Seeked);
-        self.subscribe_to_event(EventType::Rate, tx.clone(), PlayerManagerMessage::Rate);
-
-        // Discover and query any players that are already active on D-Bus
+        // Discover active players on startup
         if let Ok(player_ids) = self.dbus_client.get_players() {
             for id in player_ids {
-                if let Ok(metadata) = self.dbus_client.query_metadata(&id) {
-                    let _ = tx.send(PlayerManagerMessage::Metadata(Box::new(metadata)));
-                }
+                let metadata = self
+                    .dbus_client
+                    .query_metadata(&id)
+                    .unwrap_or_else(|_| MprisMetadata::new(id.clone()));
+                let identity = self
+                    .dbus_client
+                    .query_mediaplayer_identity(&id)
+                    .unwrap_or_else(|_| "MPD".to_string());
+                let mut client = PlayerClient::new(identity, metadata);
+
                 if let Ok(playback) = self.dbus_client.query_playback_status(&id) {
-                    let _ = tx.send(PlayerManagerMessage::PlaybackState(playback));
+                    client.update_playback_state(playback);
                 }
+                players.insert(id, client);
+            }
+
+            if let Some(active) = self.get_most_active_player(&players) {
+                self.publish_player_state(&active, &players);
             }
         }
 
-        self.handle_events(rx, timer_tx);
-    }
-
-    fn update_player_progress(
-        &self,
-        main_tx: Sender<PlayerManagerMessage>,
-        rx: Receiver<PlayerManagerMessage>,
-    ) {
-        // since we're trying to avoid locks & shared state, we want to rely on channels & messages,
-        // we unfortunately have to maintain two separate HashMap's of our player data
-        // this HashMap only contains data relevant to tick a player's position
-        let mut players: HashMap<String, PlayerTimer> = HashMap::new();
-
         loop {
-            // FIXME: what do we do when this thread sleeps, waiting to publish a tick event?
-            // we could recieve a new player event while we sleep, and we won't handle it until we're done sleeping
-            // not ideal!!
-            // we could make the tick event happen more often, like every 250ms instead of every second?
-
-            // if there are no players currently playing, we want to block and listen until we recieve a message
-            let msg = if players.iter().any(|(_, p)| p.is_playing()) {
-                rx.try_recv().ok()
-            } else {
-                match rx.recv() {
+            let is_any_playing = players.values().any(|p| p.playing());
+            let msg = if is_any_playing {
+                match event_rx.recv_timeout(Duration::from_millis(1000)) {
                     Ok(msg) => Some(msg),
-                    Err(_) => continue,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        for player in players.values_mut().filter(|p| p.playing()) {
+                            player.update_position(player.position() + 1_000_000);
+                        }
+                        if let Some(active) = self.get_most_active_player(&players) {
+                            self.publish_player_state(&active, &players);
+                        }
+                        continue;
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            } else {
+                match event_rx.recv() {
+                    Ok(msg) => Some(msg),
+                    Err(_) => break,
                 }
             };
 
-            // TODO: this could be improved
-            // every message is handled almost identically
-            // the only difference being the value we wish to set & get
             if let Some(msg) = msg {
                 match msg {
-                    PlayerManagerMessage::PlaybackState(mpris_playback) => {
-                        let id = &mpris_playback.player_id;
-                        match players.entry(id.clone()) {
-                            Entry::Occupied(mut e) => {
-                                e.get_mut().set_playing(mpris_playback.is_playing());
-                            }
-                            Entry::Vacant(e) => {
-                                let mut timer = PlayerTimer::new();
-                                timer.set_playing(mpris_playback.is_playing());
-                                e.insert(timer);
-                            }
-                        }
+                    MprisEvent::Metadata(metadata) => {
+                        self.handle_metadata_event(&mut players, metadata);
                     }
-                    PlayerManagerMessage::Seeked(mpris_seeked) => {
-                        let id = &mpris_seeked.player_id;
-                        match players.entry(id.clone()) {
-                            Entry::Occupied(mut e) => {
-                                e.get_mut().set_position(mpris_seeked.position);
-                            }
-                            Entry::Vacant(e) => {
-                                let mut timer = PlayerTimer::new();
-                                timer.set_position(mpris_seeked.position);
-                                e.insert(timer);
-                            }
-                        }
+                    MprisEvent::Playback(playback) => {
+                        self.handle_playback_event(&mut players, playback);
                     }
-                    PlayerManagerMessage::Rate(mpris_rate) => {
-                        let id = &mpris_rate.player_id;
-                        match players.entry(id.clone()) {
-                            Entry::Occupied(mut e) => {
-                                e.get_mut().set_rate(mpris_rate.rate);
-                            }
-                            Entry::Vacant(e) => {
-                                let mut timer = PlayerTimer::new();
-                                timer.set_rate(mpris_rate.rate);
-                                e.insert(timer);
-                            }
-                        }
+                    MprisEvent::Seeked(seeked) => {
+                        self.handle_seeked_event(&mut players, seeked);
                     }
-                    // we don't care about any other events
-                    _ => continue,
                 }
             }
-
-            // TODO: to better sync the module & player,
-            // we could figure out the difference between our clock and the player
-            // e.g, on first run, delay the amount required to get an even, for example, 250ms difference
-            // between the player and the module
-            // we could also query the media player directly for its position every now and then
-            let increment_ms: u128 = 1000;
-            players
-                .iter_mut()
-                .filter(|(_, p)| p.is_playing())
-                .for_each(|(id, player)| {
-                    player.tick(increment_ms);
-
-                    if let Err(error) = main_tx.send(PlayerManagerMessage::PlayerTick((
-                        id.clone(),
-                        player.position(),
-                    ))) {
-                        error!("PlayerManager timer thread: failed to publish tick event! {error}");
-                    }
-                });
-            thread::sleep(Duration::from_millis((increment_ms) as u64));
-        }
-    }
-
-    fn subscribe_to_event<T, F>(
-        self: &Arc<Self>,
-        event_type: EventType,
-        tx: Sender<PlayerManagerMessage>,
-        message_constructor: F,
-    ) where
-        T: bincode::Decode<()>,
-        F: Fn(T) -> PlayerManagerMessage + Send + 'static,
-    {
-        match self.event_bus.subscribe(event_type.clone()) {
-            Some(rx) => {
-                thread::spawn(move || loop {
-                    let msg = rx.recv();
-                    let (playback_state, _): (T, usize) = match msg {
-                        Ok(encoded) => {
-                            bincode::decode_from_slice(&encoded[..], config::standard()).unwrap()
-                        }
-                        Err(err) => {
-                            warn!("failed to decode message in PlayerManager: {err}");
-                            continue;
-                        }
-                    };
-
-                    if let Err(err) = tx.send(message_constructor(playback_state)) {
-                        warn!("failed to send update in PlayerManager: {err}");
-                    }
-                });
-            }
-            None => error!("failed to spawn listener for {event_type:?}"),
-        }
-    }
-
-    fn handle_events(
-        &self,
-        rx: Receiver<PlayerManagerMessage>,
-        timer_tx: Sender<PlayerManagerMessage>,
-    ) {
-        let mut players: HashMap<String, PlayerClient> = HashMap::new();
-        loop {
-            let msg: PlayerManagerMessage = match rx.recv() {
-                Ok(msg) => msg,
-                Err(err) => {
-                    warn!("failed to recv PlayerManagerMessage: {err}");
-                    continue;
-                }
-            };
-
-            match msg.clone() {
-                PlayerManagerMessage::Metadata(mpris_metadata) => {
-                    self.handle_metadata_event(&mut players, *mpris_metadata);
-                }
-                PlayerManagerMessage::PlaybackState(mpris_playback) => {
-                    if let Err(err) = timer_tx.send(msg) {
-                        warn!("PlayerManager: failed to re-send message to timer thread! {err}");
-                    }
-                    self.handle_playback_event(&mut players, mpris_playback)
-                }
-                PlayerManagerMessage::Seeked(mpris_seeked) => {
-                    if let Err(err) = timer_tx.send(msg) {
-                        warn!("PlayerManager: failed to re-send message to timer thread! {err}");
-                    }
-                    self.handle_seeked_event(&mut players, mpris_seeked)
-                }
-                PlayerManagerMessage::Rate(_) => {
-                    if let Err(err) = timer_tx.send(msg) {
-                        warn!("PlayerManager: failed to re-send message to timer thread! {err}");
-                    }
-                }
-                PlayerManagerMessage::PlayerTick((id, position)) => {
-                    if let Some(p) = players.get_mut(&id) {
-                        if p.playing() {
-                            p.update_position(position);
-                        }
-                    }
-
-                    if let Some(p) = players.get(&id) {
-                        self.publish_player_state(p, &players);
-                    } else {
-                        warn!("PlayerTick event: tried to get player '{id}', but no such player exists");
-                    }
-                }
-            };
         }
     }
 
@@ -270,34 +113,23 @@ impl PlayerManager {
         players: &mut HashMap<String, PlayerClient>,
         mpris_metadata: MprisMetadata,
     ) {
-        let player_id = mpris_metadata.player_id.clone();
-        let active_players = self.get_active_player_ids(players);
-        match players.entry(player_id.clone()) {
-            Entry::Occupied(mut e) => {
-                e.get_mut().update_metadata(mpris_metadata);
-                match self.dbus_client.query_playback_status(&player_id) {
-                    Ok(playback) => e.get_mut().update_playback_state(playback),
-                    Err(err) => warn!("PlayerManager::handle_metadata_event: failed to query playback state, {err}"),
-                }
-            }
-            Entry::Vacant(e) => {
-                let identity = self
-                    .dbus_client
-                    .query_mediaplayer_identity(&player_id)
-                    .unwrap_or_else(|_| "mpd".to_string());
-                let mut player_client = PlayerClient::new(identity, mpris_metadata);
-                if let Ok(playback) = self.dbus_client.query_playback_status(&player_id) {
-                    player_client.update_playback_state(playback);
-                }
-                e.insert(player_client);
-            }
+        let id = mpris_metadata.player_id.clone();
+        if id.is_empty() {
+            return;
         }
 
-        if let Some(p) = players.get(&player_id) {
-            if !p.playing() && active_players.iter().any(|id| id != &p.get_id()) {
-            } else {
-                self.publish_player_state(p, players);
-            }
+        if let Some(player) = players.get_mut(&id) {
+            player.update_metadata(mpris_metadata);
+        } else {
+            let identity = self
+                .dbus_client
+                .query_mediaplayer_identity(&id)
+                .unwrap_or_else(|_| "MPD".to_string());
+            players.insert(id.clone(), PlayerClient::new(identity, mpris_metadata));
+        }
+
+        if let Some(player) = players.get(&id) {
+            self.publish_player_state(player, players);
         }
     }
 
@@ -306,30 +138,18 @@ impl PlayerManager {
         players: &mut HashMap<String, PlayerClient>,
         mpris_playback: MprisPlayback,
     ) {
-        let id = &mpris_playback.player_id.clone();
-        self.query_player_if_not_exists(players, id);
+        let id = mpris_playback.player_id.clone();
+        self.query_player_if_not_exists(players, &id);
 
-        let active_players = self.get_active_player_ids(players);
-
-        if let Some(player) = players.get_mut(id) {
-            match self.dbus_client.query_metadata(id) {
-                Ok(metadata) => player.update_metadata(metadata),
-                Err(err) => {
-                    warn!("PlayerManager::handle_playback_event: failed to query metadata, {err}")
-                }
+        if let Some(player) = players.get_mut(&id) {
+            if let Ok(metadata) = self.dbus_client.query_metadata(&id) {
+                player.update_metadata(metadata);
             }
             player.update_playback_state(mpris_playback);
         }
 
-        if let Some(player) = players.get(id) {
-            // if the latest player is not playing, find the most recent one that is still playing and display that instead
-            if !player.playing() && active_players.iter().any(|id| id != &player.get_id()) {
-                self.set_most_recent_player_as_active(players);
-            } else {
-                self.publish_player_state(player, players);
-            }
-        } else {
-            error!("failed to get player during PlaybackState update");
+        if let Some(active) = self.get_most_active_player(players) {
+            self.publish_player_state(&active, players);
         }
     }
 
@@ -347,16 +167,11 @@ impl PlayerManager {
 
         if let Some(player) = players.get(id) {
             self.publish_player_state(player, players);
-        } else {
-            error!("failed to get player during Seeked update");
         }
     }
 
     fn query_player_if_not_exists(&self, players: &mut HashMap<String, PlayerClient>, id: &str) {
         if !players.contains_key(id) {
-            debug!(
-                "got seeked/playback message but player does not exist, querying metadata"
-            );
             let metadata = self
                 .dbus_client
                 .query_metadata(id)
@@ -364,73 +179,32 @@ impl PlayerManager {
             let identity = self
                 .dbus_client
                 .query_mediaplayer_identity(id)
-                .unwrap_or_else(|_| "mpd".to_string());
+                .unwrap_or_else(|_| "MPD".to_string());
             players.insert(id.to_owned(), PlayerClient::new(identity, metadata));
         }
     }
 
-    fn set_most_recent_player_as_active(&self, players: &mut HashMap<String, PlayerClient>) {
-        let mut player_id: Option<String> = None;
-        if let Some((_, player)) = players
-            .iter_mut()
-            .filter(|(_, p)| p.playing())
-            .max_by_key(|(_, p)| p.last_updated)
-        {
-            player.last_updated = Instant::now();
-            player_id = Some(player.get_id());
-        };
-
-        if let Some(p) = player_id.and_then(|id| players.get(&id)) {
-            self.publish_player_state(p, players)
-        }
-    }
-
-    fn get_last_updated_player(
-        &self,
-        players: &HashMap<String, PlayerClient>,
-    ) -> Option<PlayerClient> {
-        players.values().cloned().max_by_key(|p| p.last_updated)
-    }
-
-    fn get_active_player_ids(&self, players: &mut HashMap<String, PlayerClient>) -> Vec<String> {
+    fn get_most_active_player(&self, players: &HashMap<String, PlayerClient>) -> Option<PlayerClient> {
         players
-            .iter()
-            .filter(|(_, p)| p.playing())
-            .map(|(id, _)| id)
+            .values()
+            .filter(|p| p.playing())
+            .max_by_key(|p| p.last_updated)
             .cloned()
-            .collect::<Vec<String>>()
+            .or_else(|| players.values().max_by_key(|p| p.last_updated).cloned())
     }
 
     pub fn publish_player_state(
         &self,
         player: &PlayerClient,
-        players: &HashMap<String, PlayerClient>,
+        _players: &HashMap<String, PlayerClient>,
     ) {
-        if self
-            .get_last_updated_player(players)
-            .map(|p| p.get_id() != player.get_id())
-            .is_some_and(|is_not_same| is_not_same)
-        {
-            return;
-        };
-
-        match PlayerState::from_mpris_data(
+        if let Some(state) = PlayerState::from_mpris_data(
             player.name().to_owned(),
             player.metadata(),
             player.playback_state(),
             player.position(),
         ) {
-            Some(state) => match bincode::encode_to_vec(state, config::standard()) {
-                Ok(encoded) => self
-                    .event_bus
-                    .publish(EventType::PlayerStateChanged, encoded),
-                Err(err) => {
-                    warn!("failed to encode player state, skipping publish\n\n{err}");
-                }
-            },
-            None => {
-                warn!("failed to construct PlayerState. did we get empty metadata? skipping publish: {:?}", player.metadata());
-            }
+            let _ = self.display_tx.send(state);
         }
     }
 }

@@ -1,19 +1,17 @@
 use std::{
-    sync::Arc,
+    sync::{mpsc::Sender, Arc},
     thread::{self, JoinHandle},
     time::Duration,
 };
 
-use bincode::config;
 use dbus::{arg::RefArg, blocking::Connection, message::MatchRule, Message};
 use log::{debug, error, info, warn};
 
 use crate::{
-    event_bus::{EventBusHandle, EventType},
     interfaces::dbus_client::DBusClient,
     models::{
-        args::Args, mpris_metadata::MprisMetadata, mpris_playback::MprisPlayback,
-        mpris_rate::MprisRate, mpris_seeked::MprisSeeked,
+        args::Args, mpris_event::MprisEvent, mpris_metadata::MprisMetadata,
+        mpris_playback::MprisPlayback, mpris_seeked::MprisSeeked,
     },
 };
 
@@ -21,26 +19,16 @@ use super::runnable::Runnable;
 
 pub struct DBusMonitor {
     args: Arc<Args>,
-    event_bus: EventBusHandle,
+    event_tx: Sender<MprisEvent>,
     dbus_client: Arc<DBusClient>,
 }
 
 impl DBusMonitor {
-    pub fn new(args: Arc<Args>, event_bus: EventBusHandle, dbus_client: Arc<DBusClient>) -> Self {
+    pub fn new(args: Arc<Args>, event_tx: Sender<MprisEvent>, dbus_client: Arc<DBusClient>) -> Self {
         Self {
             args,
-            event_bus,
+            event_tx,
             dbus_client,
-        }
-    }
-
-    fn determine_event_type(property: String) -> EventType {
-        match property.to_lowercase().as_str() {
-            "metadata" => EventType::PlayerSongChanged,
-            "playbackstatus" => EventType::PlaybackChanged,
-            "seeked" => EventType::Seeked,
-            "rate" => EventType::Rate,
-            _ => EventType::Unknown(property),
         }
     }
 
@@ -58,17 +46,14 @@ impl DBusMonitor {
         result
     }
 
-    fn should_handle_sender(args: Arc<Args>, dbus_client: Arc<DBusClient>, msg: &Message) -> bool {
+    fn should_handle_sender(args: &Args, dbus_client: &DBusClient, msg: &Message) -> bool {
         if args.whitelist.is_empty() {
             return true;
         }
 
         let sender = match msg.sender() {
             Some(sender) => sender.to_string(),
-            None => {
-                error!("failed to determine sender, handling it anyway");
-                return true;
-            }
+            None => return true,
         };
 
         match dbus_client.query_mediaplayer_identity(&sender) {
@@ -81,10 +66,10 @@ impl DBusMonitor {
     }
 
     fn handle_on_match(
-        args: Arc<Args>,
-        dbus_client: Arc<DBusClient>,
+        args: &Args,
+        dbus_client: &DBusClient,
         msg: &Message,
-        event_bus: EventBusHandle,
+        event_tx: &Sender<MprisEvent>,
     ) -> bool {
         if !DBusMonitor::should_handle_sender(args, dbus_client, msg) {
             debug!("ignoring sender, not in whitelist");
@@ -98,38 +83,23 @@ impl DBusMonitor {
         }
 
         for key in property_keys {
-            let event_type = DBusMonitor::determine_event_type(key);
-            let encoded = match event_type {
-                EventType::PlayerSongChanged => bincode::encode_to_vec(
-                    MprisMetadata::from_dbus_message(msg),
-                    config::standard(),
-                ),
-                EventType::PlaybackChanged => bincode::encode_to_vec(
-                    MprisPlayback::from_dbus_message(msg),
-                    config::standard(),
-                ),
-                EventType::Seeked => {
-                    bincode::encode_to_vec(MprisSeeked::from_dbus_message(msg), config::standard())
+            let event = match key.to_lowercase().as_str() {
+                "metadata" => Some(MprisEvent::Metadata(MprisMetadata::from_dbus_message(msg))),
+                "playbackstatus" => {
+                    Some(MprisEvent::Playback(MprisPlayback::from_dbus_message(msg)))
                 }
-                EventType::Rate => {
-                    bincode::encode_to_vec(MprisRate::from_dbus_message(msg), config::standard())
-                }
-                EventType::Unknown(_) => {
-                    continue;
-                }
-                _ => continue,
+                "seeked" => Some(MprisEvent::Seeked(MprisSeeked::from_dbus_message(msg))),
+                _ => None,
             };
 
-            match encoded {
-                Ok(encoded) => event_bus.publish(event_type, encoded),
-                Err(err) => error!("failed to encode MPRIS data: {err}"),
+            if let Some(event) = event {
+                let _ = event_tx.send(event);
             }
         }
 
         true
     }
 
-    // TODO: some of this should be handled by DBusClient
     pub fn begin_monitoring(&self) -> Result<(), Box<dyn std::error::Error>> {
         let conn = Connection::new_session()?;
 
@@ -147,16 +117,11 @@ impl DBusMonitor {
         ];
 
         for rule in rules {
-            let event_bus = self.event_bus.clone();
+            let event_tx = self.event_tx.clone();
             let dbus_client = self.dbus_client.clone();
             let args = self.args.clone();
             match conn.add_match(rule, move |_: (), _, msg| {
-                DBusMonitor::handle_on_match(
-                    args.clone(),
-                    dbus_client.clone(),
-                    msg,
-                    event_bus.clone(),
-                )
+                DBusMonitor::handle_on_match(&args, &dbus_client, msg, &event_tx)
             }) {
                 Ok(token) => token,
                 Err(err) => {
@@ -179,7 +144,7 @@ impl Runnable for DBusMonitor {
         thread::spawn(move || {
             info!("starting DBusMonitor thread");
             if let Err(err) = self.begin_monitoring() {
-                error!("DBusMonitor failed: {err}");
+                error!("DBusMonitor thread failed: {err}");
             }
             info!("DBusMonitor thread is stopping");
         })

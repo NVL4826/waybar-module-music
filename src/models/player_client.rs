@@ -27,10 +27,6 @@ impl PlayerClient {
         &self.player_name
     }
 
-    pub fn get_id(&self) -> String {
-        self.metadata().player_id
-    }
-
     pub fn metadata(&self) -> MprisMetadata {
         self.metadata.clone()
     }

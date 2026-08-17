@@ -1,10 +1,8 @@
-use bincode::{Decode, Encode};
+use crate::models::{
+    mpris_metadata::MprisMetadata, mpris_playback::MprisPlayback, playback_state::PlaybackState,
+};
 
-use crate::models::playback_state::PlaybackState;
-
-use super::{mpris_metadata::MprisMetadata, mpris_playback::MprisPlayback};
-
-#[derive(Debug, Clone, Encode, Decode, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PlayerState {
     pub player_id: String,
     pub player_name: String,

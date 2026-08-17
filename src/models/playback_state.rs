@@ -1,9 +1,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use bincode::{Decode, Encode};
-
-#[derive(Debug, Clone, Copy, Encode, Decode, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaybackState {
     Playing,
     Paused,

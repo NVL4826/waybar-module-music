@@ -1,10 +1,9 @@
-use bincode::{Decode, Encode};
 use dbus::Message;
 use log::{error, warn};
 
 use crate::models::playback_state::PlaybackState;
 
-#[derive(Debug, Default, Clone, Encode, Decode, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct MprisPlayback {
     pub player_id: String,
     pub playing: Option<PlaybackState>,

@@ -1,8 +1,7 @@
-use bincode::{Decode, Encode};
 use dbus::Message;
 use log::error;
 
-#[derive(Debug, Default, Clone, Encode, Decode, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct MprisSeeked {
     pub player_id: String,
     pub position: u128,
