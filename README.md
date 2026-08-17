@@ -1,105 +1,33 @@
 # waybar-module-music
 
-A real-time media monitoring module for Waybar.
+A lightweight, zero-CPU Music Player Daemon (MPD) monitoring module for Waybar written in Rust.
 
-Built with Rust using event-driven architecture and D-Bus integration to monitor MPRIS-compatible media players (Spotify, Firefox, VLC, mpv, and more).
-
-![Module showcase using marquee and marquee delay options](https://lmao.sh/pics/waybar-module-music.gif)
-![Module showcase using marquee, marquee delay & disabled control icons with custom Waybar stylei](https://lmao.sh/pics/waybar-module-music-1.gif)
+Built with an event-driven architecture using MPD's native socket protocol (`idle`) to provide instantaneous updates with zero CPU overhead.
 
 ## ✨ Features
 
-- **🔄 Real-time updates** - Instantly reflects media player state changes
-- **📱 Multi-player support** - Automatically switches between active players
-- **🎬 Marquee scrolling** - Long titles scroll smoothly within configurable width
-- **⚡ Resource efficient** - Zero CPU usage, minimal memory footprint
-- **🎨 Waybar integration** - JSON output with CSS classes for theming
-- **🎛️ Highly configurable** - Custom icons, formatting, text effects, and player filtering
+- **⚡ Zero CPU Usage & Instant Updates** - Uses MPD's socket `idle` event notification instead of continuous polling or animation timers.
+- **🎨 Waybar Integration** - Standard single-line JSON output with CSS classes (`playing`, `paused`, `stopped`) and rich tooltips.
+- **⏱️ Smart Duration & Volume Tooltip** - Displays song title, artist, album, track duration (`mm:ss` or `hh:mm:ss`), and current MPD volume.
+- **🎛️ Highly Configurable** - Custom format template strings, icons, MPD server host/port, and stopped state labels.
+- **🦀 Pure Rust** - No external C dependencies or D-Bus daemon requirements.
 
 ## 🚀 Performance
 
-Unlike polling-based solutions, this module is **event-driven**, meaning we only do any work when we have to, like when the state of a media player changes or a text effect is due for an update.
+Unlike polling-based scripts or high-frequency animation loops, `waybar-module-music` connects directly to MPD's TCP socket and blocks on the `idle` command. The process sleeps at **0% CPU** and only wakes up when MPD changes track, playback state, or volume.
 
 ## 📦 Installation
 
-### Arch Linux
-```bash
-yay -S waybar-module-music-git
-```
-
-### NixOS
-This can currently only be used with flakes.
-This will build this crate from source, so be aware that that may take a bit, depending on the hardware.
-
-To add this to your nixos configuration, you have two options:
-
-#### The overlay
-To use the overlay, just add the following to your `flake.nix`:
-```nix
-{
-  inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
-    waybar-module-music = {
-      url = "github:Andeskjerf/waybar-module-music";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-    # other flake inputs...
-  };
-  outputs = {nixpkgs, waybar-module-music, ...}@inputs : {
-    nixosConfigurations.my-host = nixpkgs.lib.nixosSystem {
-      modules = [
-        # your nixos module
-        ({...}: {
-          nixpkgs.overlays = [ waybar-module-music.overlays.default ];
-        })
-
-        # other nixos module imports ...
-      ];
-    };
-  };
-}
-```
-Now `waybar-module-music` is available in `pkgs` in your NixOS modules and you can use it however you wish.
-The easiest way is to add it to `environment.systemPackages`, then it will be available on the whole system.
-
-#### Manually accessing the package
-This isn't recommended, but if you don't wanna use the overlay, here's how to do that:
-```nix
-{
-  inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
-    waybar-module-music = {
-      url = "github:Andeskjerf/waybar-module-music";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-    # other flake inputs...
-  };
-  outputs = {nixpkgs, ...}@inputs : {
-    nixosConfigurations.my-host = nixpkgs.lib.nixosSystem {
-      specialArgs = {
-        inherit inputs;
-      };
-      modules = [
-        # your nixos module. either file or function
-        ({inputs, pkgs, ...}: {
-            environment.systemPackages = [
-                inputs.waybar-module-music.packages.${pkgs.system}.waybar-module-music
-            ];
-        })
-        # other nixos module imports ...
-      ];
-    };
-  };
-}
-```
-
 ### From Source
+
+Ensure you have Rust and Cargo installed:
+
 ```bash
-# Clone and build
 git clone https://github.com/Andeskjerf/waybar-module-music.git
 cd waybar-module-music
 cargo build --release
 
+# Copy to your PATH
 cp target/release/waybar-module-music ~/.local/bin/
 ```
 
@@ -107,103 +35,73 @@ cp target/release/waybar-module-music ~/.local/bin/
 
 ### Basic Waybar Setup
 
-Add to your Waybar config (`~/.config/waybar/config`):
+Add the custom module to your Waybar configuration (`~/.config/waybar/config`):
+
 ```json
 {
   "custom/music": {
     "format": "{}",
     "return-type": "json",
     "exec": "waybar-module-music",
+    "on-click": "mpc toggle",
+    "on-scroll-up": "mpc volume +5",
+    "on-scroll-down": "mpc volume -5"
   }
 }
 ```
 
-Include in your modules list:
+Include it in your bar modules list:
+
 ```json
 {
   "modules-left": ["custom/music", "..."]
 }
 ```
 
-### Advanced Configuration
+### CLI Options
 
 ```bash
 waybar-module-music [OPTIONS]
 ```
 
 | Option | Description | Default |
-|--------|-------------|---------|
-| `-h, --help` | Show help message | |
-| `-v, --version` | Show version | |
-| `-w, --whitelist "player1 player2"` | Only monitor specified players | All players |
-| `--play-icon <icon>` | Set play icon | `` |
-| `--pause-icon <icon>` | Set pause icon | `` |
-| `-f, --format <template>` | Format string (see below) | `[ %icon% ] %artist% - %title%` |
-| `-d, --delay-marquee <ms>` | Pause before restarting marquee | `0` |
-| `--effect-speed <ms>` | Animation update interval | `200` |
-| `-a, --artist-width <chars>` | Max artist length before overflow | Unlimited |
-| `-t, --title-width <chars>` | Max title length before overflow | `20` |
-| `-s, --stopped-label <text>` | Text to show when player is stopped | None |
-| `-m, --marquee` | Enable marquee scrolling on overflow | |
-| `--ellipsis` | Enable ellipsis (...) on overflow | |
-| `--debug` | Allow debug log events in the log file | |
+|---|---|---|
+| `-H, --host <HOST>` | MPD server host (can use `MPD_HOST` env) | `127.0.0.1` |
+| `-p, --port <PORT>` | MPD server port (can use `MPD_PORT` env) | `6600` |
+| `-f, --format <TEMPLATE>` | Format template string (see placeholders below) | `[ %icon% ] %artist% - %title%` |
+| `--play-icon <ICON>` | Play state icon | `` |
+| `--pause-icon <ICON>` | Pause state icon | `` |
+| `--stopped-icon <ICON>` | Stopped state icon | `` |
+| `-s, --stopped-label <TEXT>` | Label displayed when MPD is stopped or offline | ` mpd` |
+| `--debug` | Enable debug logging | `false` |
+| `-h, --help` | Print help message | |
+| `-V, --version` | Print version | |
 
-### Format String
+### Format String Placeholders
 
-Use these placeholders in your `--format` template:
-- `%icon%` - Play/pause icon
+You can customize the text template using `-f` / `--format`:
+
+- `%icon%` - Current playback state icon (`play_icon`, `pause_icon`, or `stopped_icon`)
+- `%title%` - Song title (falls back to filename if title tag is absent)
 - `%artist%` - Artist name
-- `%title%` - Song title
 - `%album%` - Album name
-- `%position%` - Current position of media, in this format: `mm:ss`
-- `%length%` - Media length, in this format: `mm:ss`
-- `%player%` - Player name (spotify, firefox, etc.)
-- `%player-icon%` - Configurable icon to show for specific players (see `~/.config/waybar-module-music/config.toml`)
+- `%duration%` - Total track duration (`mm:ss` or `hh:mm:ss`)
+- `%volume%` - Current volume percentage (e.g. `85%`)
 
 **Example:**
 ```bash
-waybar-module-music --format "🎵 %artist% | %title%" --marquee --title-width 25
-```
-
-### Configuring per-player icons
-
-You can find a config file at `~/.config/waybar-module-music/config.toml` where you can configure per-player icons.
-
-```toml
-[icons.players]
-sample-player = "🔊"
-default = ""
-```
-
-It works by doing a partial match against a player's name. So `spot` would match with Spotify, and anything else that contains `spot` in its name.
-
-You can also configure a default value that will be shown for any players with no configured text/icon.
-
-### Example Configurations
-
-**Minimal setup:**
-```bash
-waybar-module-music
-```
-
-**Spotify-only with custom icons:**
-```bash
-waybar-module-music --whitelist "spotify" --play-icon "▶" --pause-icon "⏸"
-```
-
-**Compact scrolling display:**
-```bash
-waybar-module-music --marquee --title-width 15 --effect-speed 150
+waybar-module-music --format "🎵 %artist% - %title% (%volume%)" --play-icon "▶" --pause-icon "⏸"
 ```
 
 ## 🎨 Styling
 
-The module provides CSS classes for theming in your Waybar stylesheet:
+The module provides CSS classes for theming in your Waybar stylesheet (`~/.config/waybar/style.css`):
 
 ```css
 #custom-music {
   padding: 0 10px;
   margin: 0 5px;
+  border-radius: 8px;
 }
 
 #custom-music.playing {
@@ -222,13 +120,15 @@ The module provides CSS classes for theming in your Waybar stylesheet:
 }
 ```
 
-**Available states:**
-- `.playing` - Media is currently playing
-- `.paused` - Media is paused
-- `.stopped` - No active players or media
-
 ## 🔧 Troubleshooting
 
-You can find the log file at `~/.cache/waybar-module-music/app.log`
+Logs are written to:
+```bash
+~/.cache/waybar-module-music/app.log
+```
 
-Open an issue and include the contents of the log if you run into any problems.
+Run with `--debug` to enable verbose logging when diagnosing connection issues with your MPD instance:
+```bash
+waybar-module-music --debug
+```
+
