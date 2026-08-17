@@ -1,31 +1,10 @@
-use log::{debug, info};
+use serde::Serialize;
 
-use crate::{
-    effects::{ellipsis::Ellipsis, marquee::Marquee, text_effect::TextEffect},
-    models::{
-        args::Args, config::Config, playback_state::PlaybackState, player_state::PlayerState,
-    },
-    utils::{mpd::MpdVolumeCache, time},
-};
+use crate::models::args::Args;
+use crate::utils::mpd::{MpdSong, MpdState, MpdStatus};
+use crate::utils::time::seconds_to_formatted_time;
 
-use super::runnable::Runnable;
-use std::{
-    collections::HashMap,
-    sync::{
-        mpsc::{self, Receiver, Sender},
-        Arc, Mutex,
-    },
-    thread,
-    time::Duration,
-};
-
-#[derive(Debug)]
-enum DisplayMessages {
-    PlayerStateChanged(PlayerState),
-    AnimationDue,
-}
-
-#[derive(serde::Serialize)]
+#[derive(Serialize)]
 struct WaybarOutput<'a> {
     text: &'a str,
     tooltip: &'a str,
@@ -34,377 +13,184 @@ struct WaybarOutput<'a> {
 }
 
 pub struct Display {
-    args: Arc<Args>,
-    config: Arc<Config>,
-    player_rx: Mutex<Option<Receiver<PlayerState>>>,
-    last_output: Mutex<String>,
-    mpd_cache: Mutex<MpdVolumeCache>,
+    last_output: std::sync::Mutex<String>,
+}
+
+impl Default for Display {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Display {
-    pub fn new(args: Arc<Args>, config: Arc<Config>, player_rx: Receiver<PlayerState>) -> Self {
+    pub fn new() -> Self {
         Self {
-            args,
-            config,
-            player_rx: Mutex::new(Some(player_rx)),
-            last_output: Mutex::new(String::new()),
-            mpd_cache: Mutex::new(MpdVolumeCache::default()),
+            last_output: std::sync::Mutex::new(String::new()),
         }
     }
 
-    fn print_if_changed(&self, output: String) {
+    /// Prints output to stdout if it changed from the previous output.
+    pub fn print_if_changed(&self, output: &str) {
         let mut last = self.last_output.lock().unwrap();
         if *last != output {
-            *last = output.clone();
+            *last = output.to_string();
             println!("{output}");
         }
     }
 
-    fn init_worker(self: Arc<Self>) {
-        self.print_if_changed(self.format_json_output(
-            self.get_stopped_label(),
-            "Đã dừng",
-            "stopped",
-        ));
+    /// Formats the current MPD status and song into Waybar JSON string.
+    pub fn format_output(&self, args: &Args, status: &MpdStatus, song: &MpdSong) -> String {
+        if status.state == MpdState::Stopped {
+            return self.format_stopped(args);
+        }
 
-        let player_rx = match self.player_rx.lock().unwrap().take() {
-            Some(rx) => rx,
-            None => return,
+        let icon = match status.state {
+            MpdState::Playing => &args.play_icon,
+            MpdState::Paused => &args.pause_icon,
+            MpdState::Stopped => &args.stopped_icon,
         };
 
-        let (tx, rx) = mpsc::channel();
-        let (effect_tx, effect_rx) = mpsc::channel();
+        let title = song.display_title();
+        let artist = song.artist.as_deref().unwrap_or("").trim();
+        let album = song.album.as_deref().unwrap_or("").trim();
+        let duration_str = song
+            .duration_seconds
+            .or(status.duration_seconds)
+            .map(seconds_to_formatted_time)
+            .unwrap_or_default();
+        let volume_str = status.volume.map(|v| format!("{v}%")).unwrap_or_default();
 
-        // Forward player state changes
-        let tx_state = tx.clone();
-        thread::spawn(move || {
-            while let Ok(state) = player_rx.recv() {
-                if tx_state.send(DisplayMessages::PlayerStateChanged(state)).is_err() {
-                    break;
-                }
-            }
-        });
-
-        // Only start effect timer thread if marquee animation is enabled
-        if self.args.marquee {
-            let tx_anim = tx;
-            let effect_speed = self.args.effect_speed as u64;
-            thread::spawn(move || {
-                Display::text_effect_timer(effect_speed, effect_rx, tx_anim);
-            });
-        }
-
-        self.listen_for_updates(rx, effect_tx, self.init_fields());
-    }
-
-    fn init_fields(&self) -> HashMap<&'static str, TextEffect> {
-        let mut fields = HashMap::new();
-
-        if self.args.marquee {
-            fields.insert(
-                "title",
-                TextEffect::new().with_effect(Box::new(Marquee::new(
-                    self.args.title_width,
-                    self.args.delay_marquee as u16,
-                ))),
-            );
-
-            fields.insert(
-                "artist",
-                TextEffect::new().with_effect(Box::new(Marquee::new(
-                    self.args.artist_width,
-                    self.args.delay_marquee as u16,
-                ))),
-            );
-        } else if self.args.ellipsis {
-            fields.insert(
-                "title",
-                TextEffect::new().with_effect(Box::new(Ellipsis::new(self.args.title_width))),
-            );
-
-            fields.insert(
-                "artist",
-                TextEffect::new().with_effect(Box::new(Ellipsis::new(self.args.artist_width))),
-            );
-        } else {
-            fields.insert("title", TextEffect::new());
-            fields.insert("artist", TextEffect::new());
-        }
-
-        fields.insert("album", TextEffect::new());
-        fields.insert("player", TextEffect::new());
-        fields.insert("player-icon", TextEffect::new());
-        fields.insert("position", TextEffect::new());
-        fields.insert("length", TextEffect::new());
-
-        fields
-    }
-
-    fn text_effect_timer(interval_ms: u64, effect_rx: Receiver<bool>, tx: Sender<DisplayMessages>) {
-        let mut active_effects = false;
-        loop {
-            if active_effects {
-                thread::sleep(Duration::from_millis(interval_ms));
-                if tx.send(DisplayMessages::AnimationDue).is_err() {
-                    break;
-                }
-                active_effects = match effect_rx.try_recv() {
-                    Ok(msg) => msg,
-                    Err(_) => active_effects,
-                };
-            } else {
-                debug!("waiting for effect trigger to continue effect timer");
-                active_effects = match effect_rx.recv() {
-                    Ok(msg) => msg,
-                    Err(_) => break,
-                };
-            }
-        }
-    }
-
-    fn set_text_effect_field(fields: &mut HashMap<&'static str, TextEffect>, value: &str, field: &'static str) {
-        if let Some(field) = fields.get_mut(field) {
-            if field.current_text() != value {
-                field.set_effect_text(value.to_string());
-                field.override_last_drawn(value.to_string());
-            }
-        }
-    }
-
-    fn should_effects_be_redrawn(&self, fields: &HashMap<&'static str, TextEffect>) -> bool {
-        fields.iter().any(|(_, v)| v.has_active_effects())
-    }
-
-    fn listen_for_updates(
-        &self,
-        rx: Receiver<DisplayMessages>,
-        effect_tx: Sender<bool>,
-        mut fields: HashMap<&'static str, TextEffect>,
-    ) {
-        let mut player_state: Option<PlayerState> = None;
-
-        while let Ok(msg) = rx.recv() {
-            match msg {
-                DisplayMessages::PlayerStateChanged(state) => {
-                    self.mpd_cache.lock().unwrap().invalidate();
-                    Display::set_text_effect_field(&mut fields, &state.title, "title");
-                    Display::set_text_effect_field(&mut fields, &state.artist, "artist");
-                    Display::set_text_effect_field(&mut fields, &state.album, "album");
-                    Display::set_text_effect_field(&mut fields, &state.player_name, "player");
-                    Display::set_text_effect_field(
-                        &mut fields,
-                        &time::microseconds_to_formatted_time(state.length as u128),
-                        "length",
-                    );
-                    Display::set_text_effect_field(
-                        &mut fields,
-                        &time::microseconds_to_formatted_time(state.position),
-                        "position",
-                    );
-                    Display::set_text_effect_field(
-                        &mut fields,
-                        self.config
-                            .get_player_icon_by_partial_match(&state.player_name),
-                        "player-icon",
-                    );
-                    player_state = Some(state);
-                    self.draw(&player_state, &mut fields);
-                    if self.args.marquee {
-                        let _ = effect_tx.send(self.should_effects_be_redrawn(&fields));
-                    }
-                }
-                DisplayMessages::AnimationDue => {
-                    if self.should_effects_be_redrawn(&fields) {
-                        for (_, v) in fields.iter_mut() {
-                            v.should_redraw();
-                        }
-                        self.draw(&player_state, &mut fields);
-                    }
-                }
-            }
-        }
-    }
-
-    fn get_class(&self, state: &PlayerState) -> String {
-        if let Some(playing) = state.playing {
-            playing.to_string()
-        } else {
-            String::from("stopped")
-        }
-    }
-
-    /// Create the final output JSON, in the format that Waybar expects
-    fn format_json_output(&self, text: &str, tooltip: &str, class: &str) -> String {
-        let output = WaybarOutput {
-            text,
-            tooltip,
-            class,
-            alt: "",
-        };
-        serde_json::to_string(&output).unwrap_or_else(|_| {
-            format!(
-                "{{\"text\": \"{}\", \"tooltip\": \"{}\", \"class\": \"{}\", \"alt\": \"\"}}",
-                text, tooltip, class
-            )
-        })
-    }
-
-    fn populate_using_placeholders(
-        &self,
-        player_state: &PlayerState,
-        fields: &mut HashMap<&'static str, TextEffect>,
-    ) -> String {
-        let title_text = if player_state.title.trim().is_empty() {
-            if !player_state.player_name.trim().is_empty() {
-                player_state.player_name.clone()
-            } else {
-                "MPD".to_string()
-            }
-        } else {
-            player_state.title.clone()
-        };
-
-        let icon = match player_state.playing.unwrap_or(PlaybackState::Stopped) {
-            PlaybackState::Playing => &self.args.play_icon,
-            PlaybackState::Paused | PlaybackState::Stopped => &self.args.pause_icon,
-        };
-
-        let title = fields.get_mut("title").unwrap().draw(&title_text);
-        let artist = fields.get_mut("artist").unwrap().draw(&player_state.artist);
-        let album = fields.get_mut("album").unwrap().draw(&player_state.album);
-        let player = fields.get_mut("player").unwrap().draw(&player_state.player_name);
-        let player_icon = fields
-            .get_mut("player-icon")
-            .unwrap()
-            .draw(self.config.get_player_icon_by_partial_match(&player_state.player_name));
-        let length = fields
-            .get_mut("length")
-            .unwrap()
-            .draw(&time::microseconds_to_formatted_time(player_state.length as u128));
-        let position = fields
-            .get_mut("position")
-            .unwrap()
-            .draw(&time::microseconds_to_formatted_time(player_state.position));
-
-        self.args
+        let display_text = args
             .format
             .replace("%icon%", icon)
             .replace("%title%", &title)
-            .replace("%artist%", &artist)
-            .replace("%album%", &album)
-            .replace("%player%", &player)
-            .replace("%player-icon%", &player_icon)
-            .replace("%length%", &length)
-            .replace("%position%", &position)
-    }
+            .replace("%artist%", artist)
+            .replace("%album%", album)
+            .replace("%duration%", &duration_str)
+            .replace("%volume%", &volume_str);
 
-    fn get_stopped_label(&self) -> &str {
-        if self.args.stopped_label.trim().is_empty() {
-            " mpd"
+        let display_text = display_text.trim();
+        let final_text = if display_text.is_empty() {
+            &args.stopped_label
         } else {
-            &self.args.stopped_label
-        }
-    }
-
-    fn draw(&self, player_state: &Option<PlayerState>, fields: &mut HashMap<&'static str, TextEffect>) {
-        let player_state = match player_state {
-            Some(state) => state,
-            None => {
-                let output = self.format_json_output(
-                    self.get_stopped_label(),
-                    "Đã dừng",
-                    "stopped",
-                );
-                self.print_if_changed(output);
-                return;
-            }
+            display_text
         };
 
-        if player_state
-            .playing
-            .is_some_and(|playback| playback == PlaybackState::Stopped)
-            || player_state.playing.is_none()
-        {
-            let output = self.format_json_output(
-                self.get_stopped_label(),
-                "Đã dừng",
-                "stopped",
-            );
-            self.print_if_changed(output);
-            return;
-        }
-
-        let title = player_state.title.trim();
-        let artist = player_state.artist.trim();
-        let song_line = if !title.is_empty() && !artist.is_empty() && artist != "N/A" && artist != "n/a" {
+        // Build rich tooltip
+        let song_line = if !artist.is_empty() && artist != "N/A" && artist != "n/a" {
             format!("{title} - {artist}")
-        } else if !title.is_empty() {
-            title.to_string()
-        } else if !artist.is_empty() && artist != "N/A" && artist != "n/a" {
-            artist.to_string()
         } else {
-            "Không có tiêu đề".to_string()
+            title
         };
 
-        let duration_str = if player_state.length > 0 {
-            if self.args.format.contains("%position%") {
-                format!(
-                    "{}/{}",
-                    time::microseconds_to_formatted_time(player_state.position),
-                    time::microseconds_to_formatted_time(player_state.length as u128)
-                )
-            } else {
-                time::microseconds_to_formatted_time(player_state.length as u128)
-            }
-        } else {
-            String::new()
-        };
-
-        let volume_opt = self.mpd_cache.lock().unwrap().get_volume();
-
-        let stats_line = match (duration_str.is_empty(), volume_opt) {
-            (false, Some(vol)) => format!("Thời lượng: {duration_str}  •  Âm lượng: {vol}%"),
-            (false, None) => format!("Thời lượng: {duration_str}"),
-            (true, Some(vol)) => format!("Âm lượng: {vol}%"),
-            (true, None) => String::new(),
-        };
-
-        let album = player_state.album.trim();
         let mut tooltip_lines = vec![song_line];
-
         if !album.is_empty() && album != "N/A" && album != "n/a" {
             tooltip_lines.push(format!("Album: {album}"));
         }
 
-        if !stats_line.is_empty() {
-            tooltip_lines.push(stats_line);
+        match (!duration_str.is_empty(), status.volume) {
+            (true, Some(vol)) => tooltip_lines.push(format!("Thời lượng: {duration_str}  •  Âm lượng: {vol}%")),
+            (true, None) => tooltip_lines.push(format!("Thời lượng: {duration_str}")),
+            (false, Some(vol)) => tooltip_lines.push(format!("Âm lượng: {vol}%")),
+            (false, None) => {}
         }
 
         let tooltip = tooltip_lines.join("\n");
+        let class = status.state.as_class_str();
 
-        let populated = self.populate_using_placeholders(player_state, fields);
-        let display_text = if populated.trim().is_empty() {
-            self.get_stopped_label()
-        } else {
-            populated.trim()
+        let output = WaybarOutput {
+            text: final_text,
+            tooltip: &tooltip,
+            class,
+            alt: "",
         };
 
-        let output = self.format_json_output(
-            display_text,
-            &tooltip,
-            &self.get_class(player_state),
-        );
-
-        self.print_if_changed(output);
+        serde_json::to_string(&output).unwrap_or_else(|_| {
+            format!(
+                "{{\"text\": \"{}\", \"tooltip\": \"{}\", \"class\": \"{}\", \"alt\": \"\"}}",
+                final_text, tooltip, class
+            )
+        })
     }
-}
 
-impl Runnable for Display {
-    fn run(self: Arc<Self>) -> std::thread::JoinHandle<()> {
-        thread::spawn(move || {
-            info!("starting Display thread");
-            self.init_worker();
-            info!("Display thread is stopping");
+    /// Formats the stopped / offline output string.
+    pub fn format_stopped(&self, args: &Args) -> String {
+        let output = WaybarOutput {
+            text: &args.stopped_label,
+            tooltip: "Đã dừng",
+            class: "stopped",
+            alt: "",
+        };
+        serde_json::to_string(&output).unwrap_or_else(|_| {
+            format!(
+                "{{\"text\": \"{}\", \"tooltip\": \"Đã dừng\", \"class\": \"stopped\", \"alt\": \"\"}}",
+                args.stopped_label
+            )
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_display_format_stopped() {
+        let display = Display::new();
+        let args = Args {
+            host: "127.0.0.1".into(),
+            port: 6600,
+            format: "%artist% - %title%".into(),
+            play_icon: "play".into(),
+            pause_icon: "pause".into(),
+            stopped_icon: "stop".into(),
+            stopped_label: " mpd".into(),
+            debug: false,
+        };
+
+        let status = MpdStatus {
+            state: MpdState::Stopped,
+            volume: None,
+            duration_seconds: None,
+        };
+        let song = MpdSong::default();
+
+        let json_str = display.format_output(&args, &status, &song);
+        assert!(json_str.contains(" mpd"));
+        assert!(json_str.contains("\"class\":\"stopped\""));
+    }
+
+    #[test]
+    fn test_display_format_playing() {
+        let display = Display::new();
+        let args = Args {
+            host: "127.0.0.1".into(),
+            port: 6600,
+            format: "[ %icon% ] %artist% - %title%".into(),
+            play_icon: "".into(),
+            pause_icon: "".into(),
+            stopped_icon: "".into(),
+            stopped_label: " mpd".into(),
+            debug: false,
+        };
+
+        let status = MpdStatus {
+            state: MpdState::Playing,
+            volume: Some(85),
+            duration_seconds: Some(215),
+        };
+        let song = MpdSong {
+            title: Some("Song Title".into()),
+            artist: Some("Artist Name".into()),
+            album: Some("Album Name".into()),
+            file: None,
+            duration_seconds: Some(215),
+        };
+
+        let json_str = display.format_output(&args, &status, &song);
+        assert!(json_str.contains("Artist Name - Song Title"));
+        assert!(json_str.contains("\"class\":\"playing\""));
+        assert!(json_str.contains("85%"));
+    }
+}
+

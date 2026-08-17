@@ -1,53 +1,42 @@
 use clap::Parser;
 
-#[derive(Parser, Debug)]
-#[command(version)]
+#[derive(Parser, Debug, Clone)]
+#[command(
+    name = "waybar-module-music",
+    about = "Lightweight MPD music module for Waybar",
+    version
+)]
 pub struct Args {
-    /// Only monitor specified players, e.g "spotify firefox"
-    #[arg(short, long, value_delimiter = ' ')]
-    pub whitelist: Vec<String>,
+    /// MPD server host
+    #[arg(short = 'H', long, default_value = "127.0.0.1", env = "MPD_HOST")]
+    pub host: String,
 
-    /// Set play icon
-    #[arg(long, default_value_t = String::from(""))]
-    pub play_icon: String,
+    /// MPD server port
+    #[arg(short = 'p', long, default_value_t = 6600, env = "MPD_PORT")]
+    pub port: u16,
 
-    /// Set pause icon
-    #[arg(long, default_value_t = String::from(""))]
-    pub pause_icon: String,
-
-    /// Format string
-    #[arg(short, long, default_value_t = String::from("[ %icon% ] %artist% - %title%"))]
+    /// Format template string. Placeholders: %icon%, %title%, %artist%, %album%, %duration%, %volume%
+    #[arg(short = 'f', long, default_value = "[ %icon% ] %artist% - %title%")]
     pub format: String,
 
-    /// Pause before restarting marquee, in ms
-    #[arg(short, long, default_value_t = 0)]
-    pub delay_marquee: u32,
+    /// Play icon
+    #[arg(long, default_value = "")]
+    pub play_icon: String,
 
-    /// Animation update interval, in ms
-    #[arg(long, default_value_t = 200)]
-    pub effect_speed: u16,
+    /// Pause icon
+    #[arg(long, default_value = "")]
+    pub pause_icon: String,
 
-    /// Max artist length before overflow
-    #[arg(short, long, default_value_t = 0)]
-    pub artist_width: u16,
+    /// Stopped icon
+    #[arg(long, default_value = "")]
+    pub stopped_icon: String,
 
-    /// Max title length before overflow
-    #[arg(short, long, default_value_t = 20)]
-    pub title_width: u16,
-
-    /// Text to display when player is stopped
-    #[arg(short, long, default_value_t = String::new())]
+    /// Text to display when MPD is stopped or offline
+    #[arg(short = 's', long, default_value = " mpd")]
     pub stopped_label: String,
-
-    /// Enable marquee scrolling on overflow
-    #[arg(short, long, default_value_t = false)]
-    pub marquee: bool,
-
-    /// Enable ellipsis (...) on overflow
-    #[arg(long, default_value_t = false)]
-    pub ellipsis: bool,
 
     /// Enable debug logging
     #[arg(long, default_value_t = false)]
     pub debug: bool,
 }
+

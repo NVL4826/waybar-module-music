@@ -1,70 +1,221 @@
-use std::io::{Read, Write};
+use std::fmt;
+use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-/// Direct query to the local MPD daemon over TCP (127.0.0.1:6600) for current volume percentage (0-100).
-pub fn get_mpd_volume() -> Option<u8> {
-    let addr: SocketAddr = "127.0.0.1:6600".parse().ok()?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(50)).ok()?;
-    stream.set_read_timeout(Some(Duration::from_millis(50))).ok()?;
-    stream.set_write_timeout(Some(Duration::from_millis(50))).ok()?;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MpdState {
+    Playing,
+    Paused,
+    #[default]
+    Stopped,
+}
 
-    let mut buf = [0u8; 256];
-    let _ = stream.read(&mut buf).ok()?; // read MPD banner
-    stream.write_all(b"status\nclose\n").ok()?;
+impl MpdState {
+    pub fn from_mpd_str(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "play" => MpdState::Playing,
+            "pause" => MpdState::Paused,
+            _ => MpdState::Stopped,
+        }
+    }
 
-    let mut response = String::new();
-    let _ = stream.read_to_string(&mut response).ok()?;
+    pub fn as_class_str(&self) -> &'static str {
+        match self {
+            MpdState::Playing => "playing",
+            MpdState::Paused => "paused",
+            MpdState::Stopped => "stopped",
+        }
+    }
+}
 
-    for line in response.lines() {
-        if let Some(vol_str) = line.strip_prefix("volume: ") {
-            if let Ok(vol) = vol_str.trim().parse::<u8>() {
-                return Some(vol);
+impl fmt::Display for MpdState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_class_str())
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MpdStatus {
+    pub state: MpdState,
+    pub volume: Option<u8>,
+    pub duration_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MpdSong {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub file: Option<String>,
+    pub duration_seconds: Option<u64>,
+}
+
+impl MpdSong {
+    /// Returns a clean display title (Title tag or filename without extension).
+    pub fn display_title(&self) -> String {
+        if let Some(ref title) = self.title {
+            let t = title.trim();
+            if !t.is_empty() {
+                return t.to_string();
             }
         }
-    }
-
-    None
-}
-
-/// Cached MPD volume provider that throttles TCP socket queries.
-#[derive(Debug)]
-pub struct MpdVolumeCache {
-    cached_volume: Option<u8>,
-    last_checked: Option<Instant>,
-    ttl: Duration,
-}
-
-impl Default for MpdVolumeCache {
-    fn default() -> Self {
-        Self::new(Duration::from_millis(1500))
-    }
-}
-
-impl MpdVolumeCache {
-    pub fn new(ttl: Duration) -> Self {
-        Self {
-            cached_volume: None,
-            last_checked: None,
-            ttl,
+        if let Some(ref file) = self.file {
+            if let Some(name) = std::path::Path::new(file).file_name().and_then(|n| n.to_str()) {
+                if let Some(stem) = name.strip_suffix(".mp3")
+                    .or_else(|| name.strip_suffix(".flac"))
+                    .or_else(|| name.strip_suffix(".m4a"))
+                    .or_else(|| name.strip_suffix(".ogg"))
+                    .or_else(|| name.strip_suffix(".opus"))
+                    .or_else(|| name.strip_suffix(".wav"))
+                {
+                    return stem.to_string();
+                }
+                return name.to_string();
+            }
         }
+        "Không có tiêu đề".to_string()
+    }
+}
+
+pub struct MpdClient {
+    stream: TcpStream,
+    reader: BufReader<TcpStream>,
+}
+
+impl MpdClient {
+    /// Connects to the MPD server with a connection timeout.
+    pub fn connect(host: &str, port: u16, timeout: Duration) -> std::io::Result<Self> {
+        let addr_str = format!("{}:{}", host, port);
+        let addrs: Vec<SocketAddr> = std::net::ToSocketAddrs::to_socket_addrs(&addr_str)?
+            .collect();
+
+        let socket_addr = addrs.first().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::AddrNotAvailable, "Could not resolve host")
+        })?;
+
+        let stream = TcpStream::connect_timeout(socket_addr, timeout)?;
+        stream.set_nodelay(true)?;
+
+        let reader_stream = stream.try_clone()?;
+        let mut reader = BufReader::new(reader_stream);
+
+        // Read the MPD banner: "OK MPD <version>\n"
+        let mut banner = String::new();
+        reader.read_line(&mut banner)?;
+        if !banner.starts_with("OK MPD") {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Invalid MPD banner: {banner}"),
+            ));
+        }
+
+        Ok(Self { stream, reader })
     }
 
-    pub fn get_volume(&mut self) -> Option<u8> {
-        let now = Instant::now();
-        if let Some(last) = self.last_checked {
-            if now.duration_since(last) < self.ttl {
-                return self.cached_volume;
+    /// Queries the current MPD playback status and current song in a single atomic batch.
+    pub fn query_status_and_song(&mut self) -> std::io::Result<(MpdStatus, MpdSong)> {
+        self.stream
+            .write_all(b"command_list_begin\nstatus\ncurrentsong\ncommand_list_end\n")?;
+        self.stream.flush()?;
+
+        let mut status = MpdStatus::default();
+        let mut song = MpdSong::default();
+
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let bytes_read = self.reader.read_line(&mut line)?;
+            if bytes_read == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "MPD connection closed unexpectedly",
+                ));
+            }
+
+            let trimmed = line.trim();
+            if trimmed == "OK" {
+                break;
+            }
+            if trimmed.starts_with("ACK") {
+                return Err(std::io::Error::other(format!("MPD Error: {trimmed}")));
+            }
+
+
+            if let Some((key, val)) = trimmed.split_once(':') {
+                let key = key.trim();
+                let val = val.trim();
+
+                match key {
+                    "state" => status.state = MpdState::from_mpd_str(val),
+                    "volume" => {
+                        if let Ok(vol) = val.parse::<i32>() {
+                            if vol >= 0 {
+                                status.volume = Some(vol as u8);
+                            }
+                        }
+                    }
+                    "duration" => {
+                        if let Ok(dur) = val.parse::<f64>() {
+                            let dur_secs = dur.round() as u64;
+                            status.duration_seconds = Some(dur_secs);
+                            song.duration_seconds = Some(dur_secs);
+                        }
+                    }
+                    "time" => {
+                        if let Some((_, total_str)) = val.split_once(':') {
+                            if let Ok(dur) = total_str.parse::<u64>() {
+                                status.duration_seconds = Some(dur);
+                                song.duration_seconds = Some(dur);
+                            }
+                        }
+                    }
+                    "Title" => song.title = Some(val.to_string()),
+                    "Artist" => song.artist = Some(val.to_string()),
+                    "Album" => song.album = Some(val.to_string()),
+                    "file" => song.file = Some(val.to_string()),
+                    "Time" => {
+                        if let Ok(dur) = val.parse::<u64>() {
+                            if song.duration_seconds.is_none() {
+                                song.duration_seconds = Some(dur);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
 
-        self.last_checked = Some(now);
-        self.cached_volume = get_mpd_volume();
-        self.cached_volume
+        Ok((status, song))
     }
 
-    pub fn invalidate(&mut self) {
-        self.last_checked = None;
+    /// Blocks on MPD `idle` until a player, mixer, or options event occurs.
+    pub fn wait_for_idle(&mut self) -> std::io::Result<()> {
+        self.stream.write_all(b"idle player mixer options\n")?;
+        self.stream.flush()?;
+
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let bytes_read = self.reader.read_line(&mut line)?;
+            if bytes_read == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "MPD connection closed during idle",
+                ));
+            }
+
+            let trimmed = line.trim();
+            if trimmed == "OK" {
+                break;
+            }
+            if trimmed.starts_with("ACK") {
+                return Err(std::io::Error::other(format!("MPD idle Error: {trimmed}")));
+            }
+
+        }
+
+        Ok(())
     }
 }
 
@@ -73,27 +224,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_get_mpd_volume_graceful_fallback() {
-        // Even if MPD is stopped/unavailable, get_mpd_volume should not panic and return Option
-        let _ = get_mpd_volume();
+    fn test_mpd_state_parsing() {
+        assert_eq!(MpdState::from_mpd_str("play"), MpdState::Playing);
+        assert_eq!(MpdState::from_mpd_str("pause"), MpdState::Paused);
+        assert_eq!(MpdState::from_mpd_str("stop"), MpdState::Stopped);
+        assert_eq!(MpdState::from_mpd_str("other"), MpdState::Stopped);
     }
 
     #[test]
-    fn test_mpd_volume_cache_caching() {
-        let mut cache = MpdVolumeCache::new(Duration::from_secs(10));
-        assert!(cache.last_checked.is_none());
+    fn test_mpd_song_display_title() {
+        let song_with_title = MpdSong {
+            title: Some("Test Track".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(song_with_title.display_title(), "Test Track");
 
-        let _ = cache.get_volume();
-        assert!(cache.last_checked.is_some());
+        let song_with_file = MpdSong {
+            file: Some("/path/to/my_favorite_song.mp3".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(song_with_file.display_title(), "my_favorite_song");
 
-        let last_time = cache.last_checked;
-        // Immediate second call should reuse cached result without changing last_checked
-        let _ = cache.get_volume();
-        assert_eq!(cache.last_checked, last_time);
-
-        // Invalidate should reset cache timestamp
-        cache.invalidate();
-        assert!(cache.last_checked.is_none());
+        let empty = MpdSong::default();
+        assert_eq!(empty.display_title(), "Không có tiêu đề");
     }
 }
+
+
 

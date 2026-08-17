@@ -1,23 +1,17 @@
-use std::{
-    fs::File,
-    sync::{mpsc, Arc},
-};
+use std::{fs::File, thread, time::Duration};
 
 use clap::Parser;
-use interfaces::dbus_client::DBusClient;
-use log::info;
-use models::{args::Args, config::Config};
-use services::{
-    dbus_monitor::DBusMonitor, display::Display, player_manager::PlayerManager, runnable::Runnable,
-};
+use log::{debug, info, warn};
 use simplelog::{CombinedLogger, Config as LogConfig, WriteLogger};
 
-mod effects;
 mod helpers;
-mod interfaces;
 mod models;
 mod services;
 mod utils;
+
+use models::args::Args;
+use services::display::Display;
+use utils::mpd::MpdClient;
 
 fn init_logger(debug: bool) -> Result<(), Box<dyn std::error::Error>> {
     let cache_dir = helpers::dir::get_and_create_dir(dirs::cache_dir)?;
@@ -36,50 +30,49 @@ fn init_logger(debug: bool) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Arc::new(Args::parse());
-    init_logger(args.debug)?;
+    let args = Args::parse();
+    let _ = init_logger(args.debug);
 
-    let config = match Config::new() {
-        Ok(config) => Arc::new(config),
-        Err(err) => {
-            eprintln!("{err}");
-            return Err(Box::new(err));
+    info!("Starting waybar-module-music for MPD ({}:{})", args.host, args.port);
+
+    let display = Display::new();
+
+    // Print initial stopped state until connected
+    display.print_if_changed(&display.format_stopped(&args));
+
+    loop {
+        debug!("Connecting to MPD at {}:{}", args.host, args.port);
+        match MpdClient::connect(&args.host, args.port, Duration::from_secs(2)) {
+            Ok(mut client) => {
+                info!("Connected to MPD successfully");
+                loop {
+                    match client.query_status_and_song() {
+                        Ok((status, song)) => {
+                            debug!("MPD state: {:?}, song: {:?}", status.state, song.title);
+                            let output = display.format_output(&args, &status, &song);
+                            display.print_if_changed(&output);
+                        }
+                        Err(err) => {
+                            warn!("Failed to query MPD status: {err}");
+                            break;
+                        }
+                    }
+
+                    // Block on MPD idle events (0% CPU, 0ms latency on changes)
+                    if let Err(err) = client.wait_for_idle() {
+                        warn!("MPD idle connection closed: {err}");
+                        break;
+                    }
+                }
+            }
+            Err(err) => {
+                debug!("Unable to connect to MPD: {err}");
+            }
         }
-    };
 
-    let (event_tx, event_rx) = mpsc::channel();
-    let (display_tx, display_rx) = mpsc::channel();
-
-    let dbus_client = Arc::new(DBusClient::new());
-
-    let services: Vec<Arc<dyn Runnable>> = vec![
-        Arc::new(DBusMonitor::new(
-            args.clone(),
-            event_tx,
-            dbus_client.clone(),
-        )),
-        Arc::new(PlayerManager::new(
-            event_rx,
-            display_tx,
-            dbus_client,
-        )),
-        Arc::new(Display::new(
-            args,
-            config,
-            display_rx,
-        )),
-    ];
-
-    let mut handles = vec![];
-    for service in services {
-        handles.push(service.run());
+        // Connection dropped or failed: output stopped status and wait before reconnect
+        display.print_if_changed(&display.format_stopped(&args));
+        thread::sleep(Duration::from_secs(2));
     }
-
-    for handle in handles {
-        let _ = handle.join();
-    }
-
-    info!("all threads stopped, stopping...");
-
-    Ok(())
 }
+
