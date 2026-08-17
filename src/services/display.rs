@@ -5,7 +5,7 @@ use crate::{
     models::{
         args::Args, config::Config, playback_state::PlaybackState, player_state::PlayerState,
     },
-    utils::time,
+    utils::{mpd::MpdVolumeCache, time},
 };
 
 use super::runnable::Runnable;
@@ -38,6 +38,7 @@ pub struct Display {
     config: Arc<Config>,
     player_rx: Mutex<Option<Receiver<PlayerState>>>,
     last_output: Mutex<String>,
+    mpd_cache: Mutex<MpdVolumeCache>,
 }
 
 impl Display {
@@ -47,6 +48,7 @@ impl Display {
             config,
             player_rx: Mutex::new(Some(player_rx)),
             last_output: Mutex::new(String::new()),
+            mpd_cache: Mutex::new(MpdVolumeCache::default()),
         }
     }
 
@@ -184,6 +186,7 @@ impl Display {
         while let Ok(msg) = rx.recv() {
             match msg {
                 DisplayMessages::PlayerStateChanged(state) => {
+                    self.mpd_cache.lock().unwrap().invalidate();
                     Display::set_text_effect_field(&mut fields, &state.title, "title");
                     Display::set_text_effect_field(&mut fields, &state.artist, "artist");
                     Display::set_text_effect_field(&mut fields, &state.album, "album");
@@ -357,7 +360,7 @@ impl Display {
             String::new()
         };
 
-        let volume_opt = crate::utils::mpd::get_mpd_volume();
+        let volume_opt = self.mpd_cache.lock().unwrap().get_volume();
 
         let stats_line = match (duration_str.is_empty(), volume_opt) {
             (false, Some(vol)) => format!("Thời lượng: {duration_str}  •  Âm lượng: {vol}%"),
