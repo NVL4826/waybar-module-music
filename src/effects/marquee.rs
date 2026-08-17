@@ -85,7 +85,8 @@ impl Effect for Marquee {
     }
 
     fn update_active(&mut self) {
-        self.active = self.text.len() > self.max_width as usize && self.max_width > 0
+        self.active =
+            self.text.graphemes(true).count() > self.max_width as usize && self.max_width > 0;
     }
 
     fn set_text(&mut self, text: String) {
@@ -93,3 +94,40 @@ impl Effect for Marquee {
         self.update_active();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_marquee_ascii() {
+        let mut effect = Marquee::new(10, 0);
+        effect.set_text("hello".to_string());
+        assert!(!effect.is_active());
+        assert_eq!(effect.apply("hello".to_string()), "hello");
+
+        effect.set_text("hello world from rust".to_string());
+        assert!(effect.is_active());
+    }
+
+    #[test]
+    fn test_marquee_unicode_vietnamese_within_bounds() {
+        let mut effect = Marquee::new(18, 0);
+        // "Cơn Mưa Ngang Qua" is 17 graphemes, 21 bytes
+        let text = "Cơn Mưa Ngang Qua".to_string();
+        effect.set_text(text.clone());
+        assert!(!effect.is_active(), "17 graphemes <= 18 max_width");
+        assert_eq!(effect.apply(text.clone()), text);
+    }
+
+    #[test]
+    fn test_marquee_emojis() {
+        let mut effect = Marquee::new(5, 0);
+        // 4 emoji graphemes, 16 bytes
+        let text = "🎵🎶🎧🎤".to_string();
+        effect.set_text(text.clone());
+        assert!(!effect.is_active(), "4 emojis <= 5 max_width");
+        assert_eq!(effect.apply(text), "🎵🎶🎧🎤");
+    }
+}
+
