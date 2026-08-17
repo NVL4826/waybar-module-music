@@ -141,7 +141,6 @@ impl MpdClient {
                 return Err(std::io::Error::other(format!("MPD Error: {trimmed}")));
             }
 
-
             if let Some((key, val)) = trimmed.split_once(':') {
                 let key = key.trim();
                 let val = val.trim();
@@ -212,7 +211,6 @@ impl MpdClient {
             if trimmed.starts_with("ACK") {
                 return Err(std::io::Error::other(format!("MPD idle Error: {trimmed}")));
             }
-
         }
 
         Ok(())
@@ -249,6 +247,3 @@ mod tests {
         assert_eq!(empty.display_title(), "Không có tiêu đề");
     }
 }
-
-
-

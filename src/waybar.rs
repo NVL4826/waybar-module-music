@@ -1,8 +1,20 @@
 use serde::Serialize;
 
-use crate::models::args::Args;
-use crate::utils::mpd::{MpdSong, MpdState, MpdStatus};
-use crate::utils::time::seconds_to_formatted_time;
+use crate::cli::Args;
+use crate::mpd::{MpdSong, MpdState, MpdStatus};
+
+/// Formats seconds into "mm:ss" or "hh:mm:ss" if duration >= 1 hour.
+pub fn seconds_to_formatted_time(total_seconds: u64) -> String {
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+
+    if hours > 0 {
+        format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+    } else {
+        format!("{:02}:{:02}", minutes, seconds)
+    }
+}
 
 #[derive(Serialize)]
 struct WaybarOutput<'a> {
@@ -12,17 +24,17 @@ struct WaybarOutput<'a> {
     alt: &'a str,
 }
 
-pub struct Display {
+pub struct WaybarDisplay {
     last_output: std::sync::Mutex<String>,
 }
 
-impl Default for Display {
+impl Default for WaybarDisplay {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Display {
+impl WaybarDisplay {
     pub fn new() -> Self {
         Self {
             last_output: std::sync::Mutex::new(String::new()),
@@ -135,8 +147,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_seconds_to_formatted_time() {
+        assert_eq!(seconds_to_formatted_time(0), "00:00");
+        assert_eq!(seconds_to_formatted_time(65), "01:05");
+        assert_eq!(seconds_to_formatted_time(3599), "59:59");
+        assert_eq!(seconds_to_formatted_time(3600), "01:00:00");
+        assert_eq!(seconds_to_formatted_time(3665), "01:01:05");
+        assert_eq!(seconds_to_formatted_time(7325), "02:02:05");
+    }
+
+    #[test]
     fn test_display_format_stopped() {
-        let display = Display::new();
+        let display = WaybarDisplay::new();
         let args = Args {
             host: "127.0.0.1".into(),
             port: 6600,
@@ -162,7 +184,7 @@ mod tests {
 
     #[test]
     fn test_display_format_playing() {
-        let display = Display::new();
+        let display = WaybarDisplay::new();
         let args = Args {
             host: "127.0.0.1".into(),
             port: 6600,
@@ -193,4 +215,3 @@ mod tests {
         assert!(json_str.contains("85%"));
     }
 }
-

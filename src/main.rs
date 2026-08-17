@@ -1,41 +1,25 @@
-use std::{fs::File, thread, time::Duration};
+use std::{thread, time::Duration};
 
 use clap::Parser;
 use log::{debug, info, warn};
-use simplelog::{CombinedLogger, Config as LogConfig, WriteLogger};
 
-mod helpers;
-mod models;
-mod services;
-mod utils;
+mod cli;
+mod logger;
+mod mpd;
+mod waybar;
 
-use models::args::Args;
-use services::display::Display;
-use utils::mpd::MpdClient;
-
-fn init_logger(debug: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let cache_dir = helpers::dir::get_and_create_dir(dirs::cache_dir)?;
-    let log_path = cache_dir.join("app.log");
-
-    CombinedLogger::init(vec![WriteLogger::new(
-        if debug {
-            log::LevelFilter::Debug
-        } else {
-            log::LevelFilter::Info
-        },
-        LogConfig::default(),
-        File::create(log_path)?,
-    )])?;
-    Ok(())
-}
+use cli::Args;
+use mpd::MpdClient;
+use waybar::WaybarDisplay;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    let _ = init_logger(args.debug);
+    let _ = logger::init_logger(args.debug);
+
 
     info!("Starting waybar-module-music for MPD ({}:{})", args.host, args.port);
 
-    let display = Display::new();
+    let display = WaybarDisplay::new();
 
     // Print initial stopped state until connected
     display.print_if_changed(&display.format_stopped(&args));
@@ -75,4 +59,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         thread::sleep(Duration::from_secs(2));
     }
 }
+
 
