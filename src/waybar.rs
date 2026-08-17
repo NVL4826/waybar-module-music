@@ -62,13 +62,17 @@ impl WaybarDisplay {
 
     /// Prints output to stdout if it changed from the previous output, immediately flushing stdout.
     pub fn print_if_changed(&self, output: &str) {
-        let mut last = self.last_output.lock().unwrap();
+        let mut last = self
+            .last_output
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if *last != output {
             *last = output.to_string();
             println!("{output}");
             let _ = std::io::stdout().flush();
         }
     }
+
 
     /// Formats the current MPD status and song into Waybar JSON string.
     pub fn format_output(&self, args: &Args, status: &MpdStatus, song: &MpdSong) -> String {

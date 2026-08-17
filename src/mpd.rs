@@ -150,17 +150,20 @@ impl MpdClient {
                     "volume" => {
                         if let Ok(vol) = val.parse::<i32>() {
                             if vol >= 0 {
-                                status.volume = Some(vol as u8);
+                                status.volume = Some(vol.clamp(0, 100) as u8);
                             }
                         }
                     }
                     "duration" => {
                         if let Ok(dur) = val.parse::<f64>() {
-                            let dur_secs = dur.round() as u64;
-                            status.duration_seconds = Some(dur_secs);
-                            song.duration_seconds = Some(dur_secs);
+                            if dur.is_finite() && dur >= 0.0 {
+                                let dur_secs = dur.round() as u64;
+                                status.duration_seconds = Some(dur_secs);
+                                song.duration_seconds = Some(dur_secs);
+                            }
                         }
                     }
+
                     "time" => {
                         if let Some((_, total_str)) = val.split_once(':') {
                             if let Ok(dur) = total_str.parse::<u64>() {

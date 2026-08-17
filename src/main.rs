@@ -1,5 +1,8 @@
+#![forbid(unsafe_code)]
+
 use clap::Parser;
 use log::info;
+
 
 mod cli;
 mod logger;
