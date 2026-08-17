@@ -1,5 +1,5 @@
 pkgname=waybar-module-mpd-git
-pkgver=0.5.0_r235.39e4371
+pkgver=0.5.0_r262.7ae229e
 pkgrel=1
 pkgdesc='MPD music module for Waybar'
 arch=('x86_64' 'aarch64')

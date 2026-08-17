@@ -36,7 +36,24 @@ pub struct Args {
     #[arg(short = 's', long, default_value = " mpd")]
     pub stopped_label: String,
 
+    /// Maximum title width before truncation (0 = disable)
+    #[arg(short = 't', long, default_value_t = 0)]
+    pub title_width: usize,
+
+    /// Maximum artist width before truncation (0 = disable)
+    #[arg(short = 'a', long, default_value_t = 0)]
+    pub artist_width: usize,
+
+    /// Maximum total text length before truncation (0 = disable)
+    #[arg(long, default_value_t = 0)]
+    pub max_length: usize,
+
+    /// Enable ellipsis (...) on overflow
+    #[arg(long, default_value_t = false)]
+    pub ellipsis: bool,
+
     /// Enable debug logging
     #[arg(long, default_value_t = false)]
     pub debug: bool,
 }
+
